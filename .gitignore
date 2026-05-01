@@ -1,0 +1,27 @@
+# Chaves e segredos locais (nunca commitar)
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Ambiente Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Ferramentas / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Streamlit
+.streamlit/secrets.toml

@@ -1,0 +1,10 @@
+services:
+  streamlit:
+    build: .
+    ports:
+      - "8501:8501"
+    # Variáveis a partir do .env na raiz do repositório (copie de .env.example)
+    env_file:
+      - ../../.env
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
