@@ -1,0 +1,61 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 01_alo_mundo_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+
+
+================================================================================
+# FICHEIRO: exercicio_1_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 1 — sem ecrã (chat com **histórico**)
+# 
+# Código **só neste caderno** (sem `agent.py`): uma lista de mensagens LangChain (`HumanMessage` / `AIMessage`) e uma chamada `invoke` por turno.
+# 
+# **Jupyter no Docker:** nesta pasta, **`./run.sh`**. Variável **`GEMINI_MODEL`** (predefinição típica: `gemini-2.0-flash`).
+# 
+# Chave: **`GOOGLE_API_KEY`** no `.env` na raiz do repositório.
+
+# --- Célula 1 (código) ---
+import os
+import sys
+
+key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+if not key:
+    raise RuntimeError("Defina GOOGLE_API_KEY (`.env` na raiz ou variáveis do Docker).")
+os.environ.setdefault("GOOGLE_API_KEY", key)
+
+modelo = (os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+if modelo.removeprefix("models/").startswith("gemini-1.5"):
+    print("Aviso: `gemini-1.5*` → uso `gemini-2.0-flash`.", file=sys.stderr, flush=True)
+    modelo = "gemini-2.0-flash"
+print(f"Modelo: {modelo}", flush=True)
+
+# --- Célula 2 (código) ---
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+llm = ChatGoogleGenerativeAI(model=modelo, temperature=0.2)
+
+mensagens = [HumanMessage(content="Explica numa frase o que é o LangChain.")]
+r = llm.invoke(mensagens)
+resposta = r.content if isinstance(r.content, str) else str(r.content)
+print("Assistente:", resposta, flush=True)
+
+mensagens.append(AIMessage(content=resposta))
+mensagens.append(HumanMessage(content="Agora resume isso numa só palavra em português."))
+r2 = llm.invoke(mensagens)
+resposta2 = r2.content if isinstance(r2.content, str) else str(r2.content)
+print("Assistente:", resposta2, flush=True)

@@ -1,0 +1,17 @@
+# Streamlit — ex. 3 (ReAct + calculadora).
+name: curso-ex03-calculadora
+
+services:
+  streamlit:
+    build: .
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      PYTHONUNBUFFERED: "1"

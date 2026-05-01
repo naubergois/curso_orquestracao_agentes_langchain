@@ -1,0 +1,46 @@
+# Jupyter + PostgreSQL — ex. 4 sem ecrã (DeepSeek). Streamlit: `04_fatores_risco_pacientes`.
+name: curso-ex04-sem-jupyter
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curso
+      POSTGRES_PASSWORD: curso
+      POSTGRES_DB: pacientes
+    volumes:
+      - ./init_db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curso -d pacientes"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_API_BASE: ${DEEPSEEK_API_BASE:-https://api.deepseek.com}
+      DATABASE_URL: postgresql://curso:curso@db:5432/pacientes
+      PYTHONUNBUFFERED: "1"
+      JUPYTER_TOKEN: ""
+    volumes:
+      - ../../:/home/jovyan/work/repo:rw
+      - ../../.env:/home/jovyan/work/repo/.env:ro
+    working_dir: /home/jovyan/work/repo/exercicios/04_fatores_risco_pacientes_sem_ecra
+    command:
+      - start-notebook.sh
+      - --ServerApp.token=
+      - --ServerApp.password=
+      - --ServerApp.ip=0.0.0.0

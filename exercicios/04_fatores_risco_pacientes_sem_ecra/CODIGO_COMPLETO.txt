@@ -1,0 +1,278 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 04_fatores_risco_pacientes_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
+psycopg2-binary>=2.9.0,<3
+tqdm>=4.66.0,<5
+
+
+================================================================================
+# FICHEIRO: exercicio_4_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 4 — sem ecrã (PostgreSQL + DeepSeek)
+# 
+# `langchain.agents.create_agent` + **`ChatOpenAI`** (API [DeepSeek](https://platform.deepseek.com)) + **`stream`/`tqdm`**.
+# 
+# Variáveis: **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL` (predef.: `deepseek-chat`), `DEEPSEEK_API_BASE` (predef.: `https://api.deepseek.com`).
+# 
+# **Um paciente por pedido** (GUIA §9.1). **429:** aumente `LLM_RETRY_*` ou espere.
+# 
+# **Docker:** `./run.sh`. A primeira célula tenta criar a tabela `pacientes` a partir de `init_db/` se a BD estiver vazia (útil com volumes antigos). Alternativa: `docker compose -f docker-compose.jupyter.yml down -v` nesta pasta e voltar a subir.
+
+# --- Célula 1 (código) ---
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import psycopg2
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from psycopg2.extras import RealDictCursor
+from tqdm.auto import tqdm
+
+_DEFAULT = "deepseek-chat"
+
+
+def _modelo() -> str:
+    return (os.environ.get("DEEPSEEK_MODEL") or _DEFAULT).strip() or _DEFAULT
+
+
+def _api_base() -> str:
+    return (os.environ.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip().rstrip("/")
+
+
+key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+if not key:
+    raise RuntimeError("Defina DEEPSEEK_API_KEY (`.env` na raiz ou Docker).")
+
+
+def _database_url() -> str:
+    u = (os.environ.get("DATABASE_URL") or "").strip()
+    return u or "postgresql://curso:curso@127.0.0.1:5433/pacientes"
+
+
+def _conn():
+    return psycopg2.connect(_database_url(), connect_timeout=10)
+
+
+def _tabela_pacientes_existe(conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'pacientes'"
+        )
+        return cur.fetchone() is not None
+
+
+def _ensure_pacientes_schema() -> None:
+    """Garante tabela `pacientes` e dados de demonstração se a BD estiver sem schema (ex.: volume Docker vazio)."""
+    root = Path.cwd()
+    ddl = root / "init_db" / "01_ddl.sql"
+    seed = root / "init_db" / "02_seed.sql"
+    if not ddl.is_file() or not seed.is_file():
+        return
+    conn = psycopg2.connect(_database_url(), connect_timeout=10)
+    try:
+        conn.autocommit = True
+        if _tabela_pacientes_existe(conn):
+            return
+        with conn.cursor() as cur:
+            cur.execute(ddl.read_text(encoding="utf-8"))
+        with conn.cursor() as cur:
+            cur.execute(seed.read_text(encoding="utf-8"))
+    finally:
+        conn.close()
+
+
+_ensure_pacientes_schema()
+
+
+_MS = """És um assistente de **estudo** em português europeu. Dados fictícios em PostgreSQL (curso).
+
+Regras:
+- Usa sempre `listar_pacientes` e/ou `obter_ficha_paciente` para dados reais; não inventes valores clínicos.
+- **Um paciente por análise** de fatores de risco de cada vez, salvo o utilizador peça explicitamente «todos» ou «cada um».
+- Identifica fatores de risco (IMC, PA, glicemia, lipídios, tabagismo, sedentarismo, idade, histórico familiar) em bullet points.
+- **Aviso no fim:** dados fictícios; só pedagógico; **não substitui avaliação médica**."""
+
+
+@tool
+def listar_pacientes() -> str:
+    """Lista id, nome e idade de todos os pacientes na base."""
+    try:
+        with _conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id, nome, idade FROM pacientes ORDER BY id ASC")
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro ao listar pacientes: {e}"
+
+
+@tool
+def obter_ficha_paciente(paciente_id: int) -> str:
+    """Obtém a ficha clínica completa (todos os campos) do paciente pelo id."""
+    try:
+        pid = int(paciente_id)
+    except (TypeError, ValueError):
+        return "Erro: paciente_id deve ser um número inteiro."
+    try:
+        with _conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM pacientes WHERE id = %s", (pid,))
+                row = cur.fetchone()
+        if not row:
+            return json.dumps({"erro": f"Sem paciente com id={pid}."}, ensure_ascii=False)
+        return json.dumps(dict(row), ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro ao ler paciente {pid}: {e}"
+
+
+def build_chat_model():
+    return ChatOpenAI(
+        model=_modelo(),
+        temperature=0.2,
+        api_key=key,
+        base_url=_api_base(),
+    )
+
+
+def build_graph():
+    return create_agent(
+        build_chat_model(),
+        tools=[listar_pacientes, obter_ficha_paciente],
+        system_prompt=SystemMessage(content=_MS),
+        checkpointer=MemorySaver(),
+    )
+
+
+def mensagem_analise_um_paciente(paciente_id: int) -> str:
+    return (
+        f"Chama **apenas** `obter_ficha_paciente` com paciente_id={int(paciente_id)}. "
+        "Resume os **fatores de risco** deste paciente em bullet points. "
+        "Não invoques `listar_pacientes` nem compares com outros. "
+        "Mantém o aviso pedagógico no fim."
+    )
+
+
+def _eh_429(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    e: BaseException | None = exc
+    while e is not None:
+        eid = id(e)
+        if eid in seen:
+            break
+        seen.add(eid)
+        blob = f"{type(e).__name__} {e!s} {e!r}".upper()
+        if any(
+            token in blob
+            for token in (
+                "429", "RESOURCE_EXHAUSTED", "RESOURCE EXHAUSTED",
+                "RATE_LIMIT", "RATE LIMIT", "QUOTA", "TOO MANY REQUESTS",
+            )
+        ):
+            return True
+        for attr in ("status_code", "code", "status"):
+            st = getattr(e, attr, None)
+            if st == 429 or (isinstance(st, str) and "429" in st):
+                return True
+        e = e.__cause__
+    return False
+
+
+def _retry_backoff_sec(tentativa: int) -> float:
+    base = max(2.0, float(os.environ.get("LLM_RETRY_DELAY_SEC", os.environ.get("GEMINI_RETRY_DELAY_SEC", "5"))))
+    cap = max(30.0, float(os.environ.get("LLM_RETRY_MAX_SLEEP_SEC", os.environ.get("GEMINI_RETRY_MAX_SLEEP_SEC", "120"))))
+    return min(base * (2**tentativa), cap)
+
+
+def invocar_agente(graph, mensagem: str, thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+    max_t = max(1, int(os.environ.get("LLM_RETRY_ATTEMPTS", os.environ.get("GEMINI_RETRY_ATTEMPTS", "8"))))
+    ultimo: BaseException | None = None
+    for tentativa in range(max_t):
+        try:
+            stream = graph.stream(
+                {"messages": [HumanMessage(content=mensagem)]},
+                config,
+                stream_mode="updates",
+            )
+            for _ in tqdm(stream, desc="Passos do grafo", unit="passo"):
+                pass
+            return
+        except Exception as e:
+            ultimo = e
+            if _eh_429(e) and tentativa < max_t - 1:
+                delay = _retry_backoff_sec(tentativa)
+                print(f"[API 429] nova tentativa em {delay:.1f}s ({tentativa + 1}/{max_t})…", file=sys.stderr, flush=True)
+                time.sleep(delay)
+                continue
+            break
+    assert ultimo is not None
+    if _eh_429(ultimo):
+        raise RuntimeError(
+            "API **429** (limite). Espere; use um paciente por pedido; aumente LLM_RETRY_* no `.env`. "
+            f"Modelo: {_modelo()}."
+        ) from ultimo
+    raise ultimo
+
+
+def texto_para_mostrar(msg) -> str | None:
+    if isinstance(msg, HumanMessage):
+        c = msg.content
+        return c if isinstance(c, str) else str(c)
+    if isinstance(msg, AIMessage):
+        parts: list[str] = []
+        if getattr(msg, "tool_calls", None):
+            nomes = [tc.get("name", "?") for tc in msg.tool_calls]
+            parts.append(f"(ferramentas: {', '.join(nomes)})")
+        c = msg.content
+        if c:
+            parts.append(c if isinstance(c, str) else str(c))
+        return "\n\n".join(parts) if parts else None
+    if isinstance(msg, ToolMessage):
+        return f"[{msg.name}] → {msg.content}"
+    return None
+
+
+def imprimir_thread(graph, thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+    snap = graph.get_state(config)
+    mensagens: list = []
+    if snap and snap.values:
+        mensagens = list(snap.values.get("messages") or [])
+    for msg in mensagens:
+        t = texto_para_mostrar(msg)
+        if t:
+            print(t, flush=True)
+
+
+print(f"Modelo DeepSeek: {_modelo()}", flush=True)
+print(f"DATABASE_URL: {_database_url()[:50]}…", flush=True)
+
+# --- Célula 2 (código) ---
+thread_id = "demo-deepseek"
+g = build_graph()
+invocar_agente(g, mensagem_analise_um_paciente(2), thread_id)
+imprimir_thread(g, thread_id)

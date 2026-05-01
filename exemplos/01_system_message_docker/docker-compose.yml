@@ -1,0 +1,16 @@
+# Exemplo: SystemMessage + HumanMessage (sem UI).
+name: curso-exemplo-01-system-message
+
+services:
+  app:
+    build: .
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      EXAMPLE_USER_MESSAGE: ${EXAMPLE_USER_MESSAGE:-}
+      PYTHONUNBUFFERED: "1"

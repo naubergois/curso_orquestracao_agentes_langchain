@@ -1,0 +1,274 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 03_calculadora
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+streamlit>=1.40.0,<2
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
+
+================================================================================
+# FICHEIRO: agent.py
+================================================================================
+
+"""Exercício 03 — agente com ferramenta calculadora (LangGraph + Gemini).
+
+A ferramenta `calculadora` avalia expressões numéricas de forma restrita (+, -, *, /, **,
+parêntesis, números). O grafo ReAct (`create_react_agent`) decide quando chamar a tool.
+"""
+
+from __future__ import annotations
+
+import ast
+import operator
+import os
+import sys
+import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _avaliar_ast(no: ast.AST) -> float:
+    if isinstance(no, ast.Expression):
+        return _avaliar_ast(no.body)
+    if isinstance(no, ast.Constant):
+        if isinstance(no.value, (int, float)) and not isinstance(no.value, bool):
+            return float(no.value)
+        raise ValueError("Só são permitidos números.")
+    if isinstance(no, ast.BinOp):
+        op = _OPS.get(type(no.op))
+        if op is None:
+            raise ValueError("Operador não permitido.")
+        return float(op(_avaliar_ast(no.left), _avaliar_ast(no.right)))
+    if isinstance(no, ast.UnaryOp):
+        op = _OPS.get(type(no.op))
+        if op is None:
+            raise ValueError("Operador unário não permitido.")
+        return float(op(_avaliar_ast(no.operand)))
+    raise ValueError("Expressão não suportada.")
+
+
+def _calcular_seguro(expressao: str) -> float:
+    arvore = ast.parse(expressao.strip(), mode="eval")
+    return _avaliar_ast(arvore)
+
+
+@tool
+def calculadora(expressao: str) -> str:
+    """Avalia uma expressão matemática com +, -, *, /, ** e parêntesis (apenas números).
+
+    Exemplos: "2 + 2", "(10 + 5) / 3", "2 ** 8"
+    """
+    try:
+        valor = _calcular_seguro(expressao)
+        # Formato limpo: inteiro se for inteiro
+        if valor == int(valor):
+            return str(int(valor))
+        return str(round(valor, 10))
+    except Exception as e:
+        return f"Erro ao calcular: {e}"
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for directory in (here.parent, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            return
+
+
+_load_local_env()
+
+_DEFAULT_GEMINI = "gemini-2.0-flash"
+
+
+def _ensure_api_key() -> None:
+    key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "Defina GOOGLE_API_KEY ou GEMINI_API_KEY no `.env` na raiz do repositório."
+        )
+    os.environ.setdefault("GOOGLE_API_KEY", key)
+
+
+def _modelo() -> str:
+    nome = (os.environ.get("GEMINI_MODEL") or _DEFAULT_GEMINI).strip() or _DEFAULT_GEMINI
+    base = nome.removeprefix("models/")
+    if base.startswith("gemini-1.5"):
+        print(
+            "Aviso: modelos `gemini-1.5*` não são usados neste curso → "
+            f"`{_DEFAULT_GEMINI}`. Atualize GEMINI_MODEL no `.env`.",
+            file=sys.stderr,
+        )
+        return _DEFAULT_GEMINI
+    return nome
+
+
+def build_chat_model() -> ChatGoogleGenerativeAI:
+    _ensure_api_key()
+    return ChatGoogleGenerativeAI(model=_modelo(), temperature=0.2)
+
+
+def build_graph():
+    """Grafo ReAct com memória em RAM (o `thread_id` no Streamlit separa conversas)."""
+    return create_react_agent(
+        build_chat_model(),
+        tools=[calculadora],
+        checkpointer=MemorySaver(),
+    )
+
+
+def _eh_429(exc: BaseException) -> bool:
+    t = str(exc).upper()
+    return "429" in t or "RESOURCE_EXHAUSTED" in t
+
+
+def proxima_mensagem_utilizador(
+    graph,
+    mensagem: str,
+    thread_id: str,
+) -> None:
+    """Acrescenta uma mensagem humana ao thread e corre o agente até resposta final."""
+    config = {"configurable": {"thread_id": thread_id}}
+    max_t = max(1, int(os.environ.get("GEMINI_RETRY_ATTEMPTS", "5")))
+    base = max(0.5, float(os.environ.get("GEMINI_RETRY_DELAY_SEC", "2")))
+    ultimo: BaseException | None = None
+
+    for tentativa in range(max_t):
+        try:
+            graph.invoke({"messages": [HumanMessage(content=mensagem)]}, config)
+            return
+        except Exception as e:
+            ultimo = e
+            if _eh_429(e) and tentativa < max_t - 1:
+                time.sleep(min(base * (2**tentativa), 60.0))
+                continue
+            break
+
+    assert ultimo is not None
+    if _eh_429(ultimo):
+        raise RuntimeError(
+            "API Gemini (429). Espere ou ajuste GEMINI_MODEL no `.env`. "
+            f"Modelo: `{_modelo()}`."
+        ) from ultimo
+    raise ultimo
+
+
+def obter_mensagens_do_thread(graph, thread_id: str):
+    """Lista de mensagens LangChain do estado actual do thread."""
+    config = {"configurable": {"thread_id": thread_id}}
+    snap = graph.get_state(config)
+    if not snap or not snap.values:
+        return []
+    return list(snap.values.get("messages") or [])
+
+
+def texto_para_mostrar(msg) -> str | None:
+    if isinstance(msg, HumanMessage):
+        c = msg.content
+        return c if isinstance(c, str) else str(c)
+    if isinstance(msg, AIMessage):
+        parts: list[str] = []
+        if getattr(msg, "tool_calls", None):
+            nomes = [tc.get("name", "?") for tc in msg.tool_calls]
+            parts.append(f"*(ferramentas: {', '.join(nomes)})*")
+        c = msg.content
+        if c:
+            parts.append(c if isinstance(c, str) else str(c))
+        return "\n\n".join(parts) if parts else None
+    if isinstance(msg, ToolMessage):
+        return f"🔧 `{msg.name}` → {msg.content}"
+    return None
+
+================================================================================
+# FICHEIRO: streamlit_app.py
+================================================================================
+
+"""Chat com agente ReAct + calculadora."""
+
+import uuid
+
+import streamlit as st
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from agent import (
+    build_graph,
+    obter_mensagens_do_thread,
+    proxima_mensagem_utilizador,
+    texto_para_mostrar,
+)
+
+st.set_page_config(page_title="Ex. 03 — Calculadora", page_icon="🔢")
+
+st.title("Exercício 03 — Agente com calculadora")
+st.caption(
+    "LangGraph `create_react_agent` com a tool **`calculadora`**. "
+    "Ex.: «Qual é (20 + 15) * 3?» ou «Calcula 2**10». Porta Docker: **8501**."
+)
+
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+
+
+@st.cache_resource
+def graph():
+    return build_graph()
+
+
+g = graph()
+for m in obter_mensagens_do_thread(g, st.session_state.thread_id):
+    if isinstance(m, HumanMessage):
+        with st.chat_message("user"):
+            st.markdown(texto_para_mostrar(m) or "")
+    elif isinstance(m, AIMessage):
+        texto = texto_para_mostrar(m)
+        if texto:
+            with st.chat_message("assistant"):
+                st.markdown(texto)
+    elif isinstance(m, ToolMessage):
+        with st.chat_message("assistant"):
+            st.caption(texto_para_mostrar(m) or "")
+
+user_text = st.chat_input("Escreve uma pergunta ou conta…")
+if user_text:
+    with st.spinner("O agente está a trabalhar…"):
+        bar = st.progress(0, text="Gemini + ferramentas…")
+        try:
+            proxima_mensagem_utilizador(g, user_text, st.session_state.thread_id)
+        except Exception as e:
+            with st.chat_message("assistant"):
+                st.error(f"**Erro:** {e}")
+        finally:
+            bar.empty()
+    st.rerun()
+
+with st.sidebar:
+    if st.button("Nova conversa"):
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.rerun()

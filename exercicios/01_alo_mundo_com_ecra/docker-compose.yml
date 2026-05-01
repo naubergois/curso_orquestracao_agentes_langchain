@@ -1,0 +1,17 @@
+# Streamlit — ex. 1 com ecrã. Variáveis: ../../.env
+name: curso-ex01-com-ecra
+
+services:
+  streamlit:
+    build: .
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      PYTHONUNBUFFERED: "1"

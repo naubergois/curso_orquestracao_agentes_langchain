@@ -1,0 +1,38 @@
+# Streamlit + PostgreSQL — ex. 4 (DeepSeek + leitura de pacientes).
+name: curso-ex04-fatores-risco
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curso
+      POSTGRES_PASSWORD: curso
+      POSTGRES_DB: pacientes
+    volumes:
+      - ./init_db:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curso -d pacientes"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  streamlit:
+    build: .
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_API_BASE: ${DEEPSEEK_API_BASE:-https://api.deepseek.com}
+      DATABASE_URL: postgresql://curso:curso@db:5432/pacientes
+      PYTHONUNBUFFERED: "1"

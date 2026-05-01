@@ -16,6 +16,9 @@ __pycache__/
 dist/
 build/
 
+# Jupyter
+.ipynb_checkpoints/
+
 # Ferramentas / OS
 .DS_Store
 .idea/

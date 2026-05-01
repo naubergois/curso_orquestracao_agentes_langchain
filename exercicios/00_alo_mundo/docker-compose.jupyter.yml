@@ -1,0 +1,31 @@
+# Servidor Jupyter no Docker (dependências pré-instaladas). Ver run_jupyter.sh .
+# GEMINI_MODEL por defeito: gemini-2.0-flash (alinhado ao caderno e ao .env.example).
+# Nome do projecto Compose separado do contentor `app` do exercício 0.
+name: curso-ex00-jupyter
+
+services:
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    env_file:
+      - ../../.env
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      PYTHONUNBUFFERED: "1"
+      # Sem token nem senha — só para desenvolvimento em localhost (não exponha a porta à Internet).
+      JUPYTER_TOKEN: ""
+    volumes:
+      - ../../:/home/jovyan/work/repo:rw
+      # Garantir .env da raiz no repo montado (só leitura)
+      - ../../.env:/home/jovyan/work/repo/.env:ro
+    working_dir: /home/jovyan/work/repo/exercicios/00_alo_mundo
+    command:
+      - start-notebook.sh
+      - --ServerApp.token=
+      - --ServerApp.password=
+      - --ServerApp.ip=0.0.0.0

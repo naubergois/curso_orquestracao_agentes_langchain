@@ -1,0 +1,73 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 02_nerd_sarcastico_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+
+
+================================================================================
+# FICHEIRO: exercicio_2_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 2 — sem ecrã (persona **nerd sarcástico**)
+# 
+# Tudo **no caderno**: texto da persona + `SystemMessage` + `HumanMessage` — **sem** histórico no modelo (cada `invoke` é um par system+user).
+# 
+# **Docker:** `./run.sh` nesta pasta. Modelo: **`GEMINI_MODEL_EX02`** (ou `gemini-2.0-flash` por omissão abaixo). Temperatura por defeito **0,75** (ajusta `temp` na célula seguinte se quiseres).
+# 
+# Chave: **`GOOGLE_API_KEY`** no `.env` na raiz.
+
+# --- Célula 1 (código) ---
+import os
+import sys
+
+key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+if not key:
+    raise RuntimeError("Defina GOOGLE_API_KEY (`.env` na raiz ou Docker).")
+os.environ.setdefault("GOOGLE_API_KEY", key)
+
+nome_modelo = (
+    os.environ.get("GEMINI_MODEL_EX02") or "gemini-2.0-flash"
+).strip() or "gemini-2.0-flash"
+if nome_modelo.removeprefix("models/").startswith("gemini-1.5"):
+    print("Aviso: `gemini-1.5*` → `gemini-2.0-flash`.", file=sys.stderr, flush=True)
+    nome_modelo = "gemini-2.0-flash"
+
+temp = float(
+    os.environ.get("NERD_SARCASTICO_TEMPERATURE")
+    or os.environ.get("ANTI_COACH_TEMPERATURE", "0.75")
+)
+temp = min(max(temp, 0.0), 2.0)
+
+PERSONA = """És um nerd sarcástico que gosta de cultura geek (tech, ciência, jogos, etc.). Responde em português.
+Ironia seca, sem ódio nem ataques a grupos protegidos. Zomba da ideia, não da pessoa. Respostas curtas (2–4 frases), salvo que peçam mais."""
+
+print(f"Modelo: {nome_modelo} | temperatura: {temp}", flush=True)
+
+# --- Célula 2 (código) ---
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+llm = ChatGoogleGenerativeAI(model=nome_modelo, temperature=temp)
+
+pergunta = "Achas que printf a debugar produção é engenharia de topo?"
+res = llm.invoke([SystemMessage(content=PERSONA), HumanMessage(content=pergunta)])
+texto = res.content if isinstance(res.content, str) else str(res.content)
+print(texto, flush=True)
+
+# --- Célula 3 (código) ---
+# Nova pergunta (sem memória da troca anterior — novo SystemMessage + HumanMessage).
+pergunta2 = "Qual é o teu filme de sci-fi preferido e porquê?"
+res = llm.invoke([SystemMessage(content=PERSONA), HumanMessage(content=pergunta2)])
+print(res.content if isinstance(res.content, str) else str(res.content), flush=True)

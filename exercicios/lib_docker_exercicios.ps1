@@ -1,5 +1,5 @@
 # Biblioteca partilhada (Windows PowerShell).
-# Projecto Compose = nome da pasta do exercicio (ex.: 01_alo_mundo).
+# Projecto Compose = nome da pasta (ex.: 01_alo_mundo_com_ecra, 01_alo_mundo_sem_ecra).
 
 $script:_ExerciciosDockerRoot = $PSScriptRoot
 
@@ -12,11 +12,19 @@ function Stop-OtherExerciseDocker {
             $sub = $_.FullName
             if ($sub -eq $currentResolved) { return }
             $yml = Join-Path $sub "docker-compose.yml"
-            if (-not (Test-Path -LiteralPath $yml)) { return }
-            Write-Host "A parar Docker do exercicio $($_.Name)…"
+            $jy = Join-Path $sub "docker-compose.jupyter.yml"
+            $has = (Test-Path -LiteralPath $yml) -or (Test-Path -LiteralPath $jy)
+            if (-not $has) { return }
             Push-Location $sub
             try {
-                docker compose down --remove-orphans 2>$null
+                if (Test-Path -LiteralPath $yml) {
+                    Write-Host "A parar Docker do exercicio $($_.Name) (compose)…"
+                    docker compose down --remove-orphans 2>$null
+                }
+                if (Test-Path -LiteralPath $jy) {
+                    Write-Host "A parar Docker Jupyter de $($_.Name)…"
+                    docker compose -f docker-compose.jupyter.yml down --remove-orphans 2>$null
+                }
             } finally {
                 Pop-Location
             }

@@ -1,0 +1,187 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 03_calculadora_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
+
+
+================================================================================
+# FICHEIRO: exercicio_3_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 3 — sem ecrã (agente **ReAct** + tool `calculadora`)
+# 
+# LangGraph `create_react_agent` com a tool **`calculadora`** (expressões com `+`, `-`, `*`, `/`, `**`, parêntesis — apenas números).
+# 
+# **Docker:** `./run.sh` nesta pasta. Modelo: **`GEMINI_MODEL`** (por omissão na célula seguinte: `gemini-2.0-flash`). Retentativas em 429: `GEMINI_RETRY_ATTEMPTS`, `GEMINI_RETRY_DELAY_SEC`.
+# 
+# Chave: **`GOOGLE_API_KEY`** no `.env` na raiz.
+
+# --- Célula 1 (código) ---
+from __future__ import annotations
+
+import ast
+import operator
+import os
+import sys
+import time
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+if not key:
+    raise RuntimeError("Defina GOOGLE_API_KEY (`.env` na raiz ou Docker).")
+os.environ.setdefault("GOOGLE_API_KEY", key)
+
+_DEFAULT = "gemini-2.0-flash"
+nome_modelo = (os.environ.get("GEMINI_MODEL") or _DEFAULT).strip() or _DEFAULT
+if nome_modelo.removeprefix("models/").startswith("gemini-1.5"):
+    print("Aviso: `gemini-1.5*` → `gemini-2.0-flash`.", file=sys.stderr, flush=True)
+    nome_modelo = _DEFAULT
+
+_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _avaliar_ast(no: ast.AST) -> float:
+    if isinstance(no, ast.Expression):
+        return _avaliar_ast(no.body)
+    if isinstance(no, ast.Constant):
+        if isinstance(no.value, (int, float)) and not isinstance(no.value, bool):
+            return float(no.value)
+        raise ValueError("Só são permitidos números.")
+    if isinstance(no, ast.BinOp):
+        op = _OPS.get(type(no.op))
+        if op is None:
+            raise ValueError("Operador não permitido.")
+        return float(op(_avaliar_ast(no.left), _avaliar_ast(no.right)))
+    if isinstance(no, ast.UnaryOp):
+        op = _OPS.get(type(no.op))
+        if op is None:
+            raise ValueError("Operador unário não permitido.")
+        return float(op(_avaliar_ast(no.operand)))
+    raise ValueError("Expressão não suportada.")
+
+
+def _calcular_seguro(expressao: str) -> float:
+    arvore = ast.parse(expressao.strip(), mode="eval")
+    return _avaliar_ast(arvore)
+
+
+@tool
+def calculadora(expressao: str) -> str:
+    """Avalia uma expressão matemática com +, -, *, /, ** e parêntesis (apenas números).
+
+    Exemplos: "2 + 2", "(10 + 5) / 3", "2 ** 8"
+    """
+    try:
+        valor = _calcular_seguro(expressao)
+        if valor == int(valor):
+            return str(int(valor))
+        return str(round(valor, 10))
+    except Exception as e:
+        return f"Erro ao calcular: {e}"
+
+
+def build_chat_model() -> ChatGoogleGenerativeAI:
+    return ChatGoogleGenerativeAI(model=nome_modelo, temperature=0.2)
+
+
+def build_graph():
+    return create_react_agent(
+        build_chat_model(),
+        tools=[calculadora],
+        checkpointer=MemorySaver(),
+    )
+
+
+print(f"Modelo: {nome_modelo}", flush=True)
+
+# --- Célula 2 (código) ---
+def _eh_429(exc: BaseException) -> bool:
+    t = str(exc).upper()
+    return "429" in t or "RESOURCE_EXHAUSTED" in t
+
+
+def invocar_agente(graph, mensagem: str, thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+    max_t = max(1, int(os.environ.get("GEMINI_RETRY_ATTEMPTS", "5")))
+    base = max(0.5, float(os.environ.get("GEMINI_RETRY_DELAY_SEC", "2")))
+    ultimo: BaseException | None = None
+    for tentativa in range(max_t):
+        try:
+            graph.invoke({"messages": [HumanMessage(content=mensagem)]}, config)
+            return
+        except Exception as e:
+            ultimo = e
+            if _eh_429(e) and tentativa < max_t - 1:
+                time.sleep(min(base * (2**tentativa), 60.0))
+                continue
+            break
+    assert ultimo is not None
+    raise ultimo
+
+
+def texto_para_mostrar(msg) -> str | None:
+    if isinstance(msg, HumanMessage):
+        c = msg.content
+        return c if isinstance(c, str) else str(c)
+    if isinstance(msg, AIMessage):
+        parts: list[str] = []
+        if getattr(msg, "tool_calls", None):
+            nomes = [tc.get("name", "?") for tc in msg.tool_calls]
+            parts.append(f"(ferramentas: {', '.join(nomes)})")
+        c = msg.content
+        if c:
+            parts.append(c if isinstance(c, str) else str(c))
+        return "\n\n".join(parts) if parts else None
+    if isinstance(msg, ToolMessage):
+        return f"[{msg.name}] → {msg.content}"
+    return None
+
+
+def imprimir_thread(graph, thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+    snap = graph.get_state(config)
+    mensagens = []
+    if snap and snap.values:
+        mensagens = list(snap.values.get("messages") or [])
+    for msg in mensagens:
+        t = texto_para_mostrar(msg)
+        if t:
+            print(t, flush=True)
+
+# --- Célula 3 (código) ---
+thread_id = "demo-notebook"
+g = build_graph()
+
+invocar_agente(g, "Qual é o resultado de (20 + 15) * 3?", thread_id)
+imprimir_thread(g, thread_id)
+
+# --- Célula 4 (código) ---
+# Segunda pergunta no mesmo thread (memória do grafo).
+invocar_agente(g, "E quanto dá 2**10?", thread_id)
+imprimir_thread(g, thread_id)

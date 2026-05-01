@@ -1,0 +1,12 @@
+# Jupyter Notebook / Lab com as dependências do exercício 0 (servidor “tipo Colab” local).
+# O Docker é iniciado no host (`run_jupyter.sh`); dentro do caderno não se instala nem se arranca Docker.
+FROM quay.io/jupyter/minimal-notebook:latest
+
+USER root
+COPY requirements.txt /tmp/requirements-ex00.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex00.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}
