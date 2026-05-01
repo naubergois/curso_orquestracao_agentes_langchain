@@ -1,6 +1,6 @@
 # Curso — orquestração de agentes com LangChain
 
-Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exemplos 00–03 e **05** usam a API **Google Gemini**; o exercício **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** foca **LCEL** e *prompt templates* (apenas Jupyter).
+Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exercícios **00–03**, **05** e **06** usam a API **Google Gemini**; o **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** aprofunda **LCEL** e *prompt templates*; o **06**, **memória e histórico** na stack LangChain (só Jupyter). Resumo por pasta: [`exercicios/README.md`](exercicios/README.md).
 
 ## Início rápido
 
@@ -12,7 +12,7 @@ Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecr
 
 | Ficheiro | Conteúdo |
 |----------|----------|
-| [`exercicios/README.md`](exercicios/README.md) | Visão geral dos exercícios numerados e scripts úteis. |
+| [`exercicios/README.md`](exercicios/README.md) | Visão geral, **descrição do que faz cada exercício**, variáveis de ambiente e scripts úteis. |
 | [`exemplos/`](exemplos/) | Exemplos pontuais (por exemplo mensagem de sistema em Docker). |
 | [`exercicios/GUIA_NOVOS_EXERCICIOS.md`](exercicios/GUIA_NOVOS_EXERCICIOS.md) | Convenções para criar novos exercícios, compose, variáveis de ambiente e checklist. |
 

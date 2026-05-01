@@ -5,6 +5,7 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 - **Gemini (Google AI):** exercícios **00–03** — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** (ver `.env.example`).
 - **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
 - **Ex. 05 (só Jupyter):** LCEL e *prompt templates* — opcional **`GEMINI_MODEL_EX05`**, senão **`GEMINI_MODEL`**; **`GEMINI_MODEL_FALLBACKS`** opcional (ver GUIA §9.2).
+- **Ex. 06 (só Jupyter):** memória / histórico — `RunnableWithMessageHistory`, lista manual, `trim_messages`; opcional **`GEMINI_MODEL_EX06`**.
 
 ## Início rápido
 
@@ -25,16 +26,23 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 | `lib_docker_exercicios.sh` / `.ps1` | Usado pelos `run_*` — para stacks paralelos não ficarem a competir pela mesma porta. |
 | `gerar_codigo_completo_txt.py` | Gera `CODIGO_COMPLETO.txt` a partir dos cadernos `…_sem_ecra`. |
 
-## Estrutura típica
+## O que faz cada exercício
 
-- `00_alo_mundo` — Jupyter (predefinido) ou `main.py` uma vez (`./run.sh --once`).
-- `01_…_com_ecra` / `01_…_sem_ecra` — chat com histórico.
-- `02_…_com_ecra` / `02_…_sem_ecra` — persona com `SystemMessage`.
-- `03_calculadora` — agente com ferramenta e LangGraph (Streamlit).
-- `03_calculadora_sem_ecra` — mesmo exercício em Jupyter (`./run.sh`).
-- `04_fatores_risco_pacientes` — agente + PostgreSQL (dados fictícios); **DeepSeek** no Streamlit (barra de progresso, um paciente de cada vez).
-- `04_fatores_risco_pacientes_sem_ecra` — mesmo tema em Jupyter + Postgres + **DeepSeek** (`run_jupyter.sh`). A pasta `init_db/` inicializa o schema no Docker; a **primeira célula** do caderno pode aplicar o mesmo schema se a base tiver sido criada vazia (volume antigo).
-- `05_prompt_templates_lcel_sem_ecra` — `ChatPromptTemplate`, operador `|`, `StrOutputParser`, `partial`, `RunnablePassthrough.assign`, `RunnableParallel` (`./run.sh` / `run_jupyter.sh`).
+| # | Pasta(s) | O que faz |
+|---|----------|-----------|
+| **00** | `00_alo_mundo` | **Primeiro contacto** com o modelo (Gemini): mensagem simples via API. Predefinição: **Jupyter**; opcional **`main.py`** com `./run.sh --once`. |
+| **01** | `01_alo_mundo_com_ecra` | **Chat na UI** (Streamlit) com histórico de conversa na sessão. |
+| | `01_alo_mundo_sem_ecra` | O mesmo conceito de **chat com histórico** no **Jupyter** (sem Streamlit). |
+| **02** | `02_nerd_sarcastico_com_ecra` | **Persona** fixa com **`SystemMessage`** “nerd sarcástico”; respostas no Streamlit alinhadas com esse tom. |
+| | `02_nerd_sarcastico_sem_ecra` | Mesma **persona por mensagem de sistema** em **Jupyter**. |
+| **03** | `03_calculadora` | **Agente** com **ferramenta** (calculadora), **LangGraph** e UI Streamlit — o modelo decide quando invocar a tool. |
+| | `03_calculadora_sem_ecra` | Mesmo **agente + ferramenta** em **Jupyter** (fluxo legível célula a célula). |
+| **04** | `04_fatores_risco_pacientes` | **Agente** que lê dados **fictícios** em **PostgreSQL** (fichas de pacientes) e comenta **fatores de risco**; **DeepSeek** + Streamlit, **um paciente por pedido**, barra de progresso. |
+| | `04_fatores_risco_pacientes_sem_ecra` | Mesmo **cenário BD + agente DeepSeek** no **Jupyter**; `init_db/` no Docker e recuperação de schema em volume vazio. |
+| **05** | `05_prompt_templates_lcel_sem_ecra` | **LCEL**: `ChatPromptTemplate`, composição em cadeia de *runnables* (operador *pipe* entre passos), `StrOutputParser`, `partial`, `RunnablePassthrough.assign`, `RunnableParallel` — *pipelines* sem agente. **Só Jupyter.** |
+| **06** | `06_memoria_langchain_sem_ecra` | **Memória / histórico**: conversa sem estado vs lista manual vs **`RunnableWithMessageHistory`**; **`trim_messages`** para limitar contexto; panorama (LangGraph, RAG). **Só Jupyter.** |
+
+**Legenda:** *com ecrã* → Streamlit + `docker-compose.yml`; *sem ecrã* → Jupyter + `docker-compose.jupyter.yml` (quando existir par, o tema é o mesmo; muda só a interface).
 
 ## Exemplo isolado
 

@@ -1,0 +1,204 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 06_memoria_langchain_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+
+
+================================================================================
+# FICHEIRO: exercicio_6_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 6 — memória e histórico no LangChain (LCEL)
+# 
+# Objetivos:
+# 
+# - Distinguir **pedido sem contexto**, **histórico gerido à mão** e **histórico com `RunnableWithMessageHistory`**.
+# - Usar **`trim_messages`** para **limitar a janela** enviada ao modelo (custo e limites de contexto).
+# - Relacionar com **persistência de agentes** (ex.: LangGraph `MemorySaver` no exercício 4).
+# 
+# Variáveis: **`GOOGLE_API_KEY`** ou **`GEMINI_API_KEY`**; modelo opcional **`GEMINI_MODEL_EX06`** (senão **`GEMINI_MODEL`**, Gemini 2.x). **`GEMINI_MODEL_FALLBACKS`** opcional (GUIA §9.2).
+# 
+# **Arranque:** `./run.sh` nesta pasta (Jupyter no Docker, só localhost).
+
+# --- Célula 1 (código) ---
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+# .env na raiz do repositório
+for p in (Path.cwd(), *Path.cwd().parents):
+    env = p / ".env"
+    if env.is_file():
+        load_dotenv(env)
+        break
+
+_ex = Path.cwd().resolve().parent
+if str(_ex) not in sys.path:
+    sys.path.insert(0, str(_ex))
+from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+
+primary = (
+    os.environ.get("GEMINI_MODEL_EX06")
+    or os.environ.get("GEMINI_MODEL")
+    or "gemini-2.0-flash"
+).strip()
+candidatos = gemini_model_candidates(primary=primary)
+llm = make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.3)
+print("Candidatos Gemini (ordem):", " → ".join(candidatos))
+
+# --- Célula 2 (markdown) ---
+# ## 1. Sem memória (cada `invoke` é independente)
+# 
+# O modelo **não** vê turnos anteriores. Adequado para classificação, extração ou perguntas isoladas.
+
+# --- Célula 3 (código) ---
+prompt_simples = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És um assistente conciso em português europeu. Respostas curtas.",
+        ),
+        ("human", "{pergunta}"),
+    ]
+)
+chain_sem_memoria = prompt_simples | llm | StrOutputParser()
+
+print(chain_sem_memoria.invoke({"pergunta": "O meu nome favorito para testes é Aurora. Memoriza isto."}))
+print(chain_sem_memoria.invoke({"pergunta": "Qual é o nome que te disse que era o meu favorito?"}))
+
+# --- Célula 4 (markdown) ---
+# ## 2. Histórico manual (`list` de mensagens)
+# 
+# Tu guardas **`HumanMessage` / `AIMessage`** numa lista e passas‑as em cada chamada. Controlo total; em produção normalmente persistes esta lista (BD, Redis, …).
+
+# --- Célula 5 (código) ---
+hist: list = [
+    SystemMessage(
+        content="És um assistente em português europeu. Mantém o contexto da conversa."
+    ),
+]
+
+def perguntar(texto: str) -> str:
+    hist.append(HumanMessage(content=texto))
+    resp = llm.invoke(hist)
+    assert isinstance(resp, AIMessage)
+    hist.append(resp)
+    return str(resp.content)
+
+
+print(perguntar("O meu nome de código é Aurora."))
+print(perguntar("Como me chamei há um instante?"))
+print("--- Nº de mensagens no histórico:", len(hist))
+
+# --- Célula 6 (markdown) ---
+# ## 3. `RunnableWithMessageHistory` (padrão LCEL)
+# 
+# O LangChain **injeta** o histórico a partir de um **armazém por `session_id`** (`get_session_history`). O *runnable* interior deve aceitar `chat_history` via `MessagesPlaceholder`.
+# 
+# Isto separa: **lógica da cadeia** vs **onde** as mensagens ficam guardadas (aqui: dicionário em memória; noutro caso: Postgres, Redis, …).
+
+# --- Célula 7 (código) ---
+prompt_chat = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És um assistente em português europeu. Conversa breve.",
+        ),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ]
+)
+chain_base = prompt_chat | llm | StrOutputParser()
+
+# Um dicionário session_id -> histórico (só RAM; reiniciar o kernel apaga tudo)
+_store: dict[str, InMemoryChatMessageHistory] = {}
+
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in _store:
+        _store[session_id] = InMemoryChatMessageHistory()
+    return _store[session_id]
+
+
+with_history = RunnableWithMessageHistory(
+    chain_base,
+    get_session_history,
+    input_messages_key="input",
+    history_messages_key="chat_history",
+)
+
+cfg_a = {"configurable": {"session_id": "user-alice"}}
+cfg_b = {"configurable": {"session_id": "user-bob"}}
+
+print("Alice:", with_history.invoke({"input": "Chamo-me Alice e gosto de SQL."}, config=cfg_a))
+print("Alice:", with_history.invoke({"input": "Qual é o meu nome?"}, config=cfg_a))
+print("Bob (outra sessão):", with_history.invoke({"input": "Qual é o meu nome?"}, config=cfg_b))
+
+# --- Célula 8 (markdown) ---
+# ## 4. Cortar o histórico — `trim_messages`
+# 
+# Com conversas longas, enviar **todas** as mensagens pode **exceder o contexto** ou **subir o custo**. `trim_messages` mantém as mensagens **mais recentes** até um teto de «tokens». Podes passar o próprio **`llm`** como `token_counter` se o integrador o suportar; aqui usamos um **contador aproximado** (~ caracteres ÷ 4) para o exemplo correr em qualquer ambiente.
+
+# --- Célula 9 (código) ---
+# Conversa artificialmente longa
+long_hist: list = [
+    SystemMessage(content="Responde só com uma palavra por vez."),
+]
+for i in range(15):
+    long_hist.append(HumanMessage(content=f"Pergunta número {i}: diz ok"))
+    long_hist.append(AIMessage(content="ok"))
+
+
+def _tokens_aproximados(msgs: list) -> int:
+    """Aproximação barata; em produção usa tiktoken ou o contador do fornecedor."""
+    return sum(len(getattr(m, "content", "") or "") for m in msgs) // 4
+
+
+# Mantém as mensagens mais recentes até ~400 «tokens» aproximados
+cortado = trim_messages(
+    long_hist,
+    max_tokens=400,
+    strategy="last",
+    token_counter=_tokens_aproximados,
+    include_system=True,
+    allow_partial=False,
+)
+
+print("Original:", len(long_hist), "mensagens")
+print("Após trim:", len(cortado), "mensagens")
+print("Primeira (sistema):", cortado[0].type)
+
+# --- Célula 10 (markdown) ---
+# ## 5. Panorama — «memória» no ecossistema
+# 
+# | Ideia | Uso típico |
+# |-------|------------|
+# | **Sem histórico** | Tarefas stateless (etiquetar, traduzir, uma pergunta). |
+# | **Lista / repositório de mensagens** | Chat clássico; tu persistes e decides política de apagamento. |
+# | **`RunnableWithMessageHistory`** | Mesmo, mas com **integração LCEL** e `session_id` configurável. |
+# | **`trim_messages` / resumos** | Gestão da **janela de contexto**; às vezes resume turnos antigos em vez de apagar. |
+# | **Checkpointer (LangGraph)** | **Estado do grafo** do agente (mensagens + passos internos), ex.: `MemorySaver` no exercício 4 — não é só «lista de chat», é **persistência do run**. |
+# | **RAG / vectorstore** | «Memória» **semântica** sobre documentos — outro exercício ou módulo. |
+# 
+# *Legado:* `ConversationBufferMemory` + `LLMChain` (API antiga). Neste curso preferimos **LCEL** + histórico explícito ou LangGraph para agentes.
