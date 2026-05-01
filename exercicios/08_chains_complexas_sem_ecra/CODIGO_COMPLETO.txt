@@ -1,0 +1,284 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 08_chains_complexas_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+
+
+================================================================================
+# FICHEIRO: exercicio_8_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 8 — cadeias **LCEL** compostas (LangChain)
+# 
+# O **LCEL** (*LangChain Expression Language*) compõe *runnables* com `|`, `RunnableParallel`, `RunnablePassthrough.assign`, `RunnableBranch` e `RunnableLambda`. Este caderno mostra padrões **juntos** — típicos em *pipelines* que não são ainda um grafo LangGraph.
+# 
+# **Pré-requisito:** exercício 5 (templates + `|`). **Variáveis:** `GOOGLE_API_KEY`, opcional `GEMINI_MODEL_EX08`, `GEMINI_MODEL_FALLBACKS`.
+# 
+# **Arranque Docker:** `./run.sh` nesta pasta.
+
+# --- Célula 1 (código) ---
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+for p in (Path.cwd(), *Path.cwd().parents):
+    env = p / ".env"
+    if env.is_file():
+        load_dotenv(env)
+        break
+
+_ex = Path.cwd().resolve().parent
+if str(_ex) not in sys.path:
+    sys.path.insert(0, str(_ex))
+from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+
+if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+    raise RuntimeError("Defina GOOGLE_API_KEY no `.env` na raiz.")
+
+_prim = (
+    os.environ.get("GEMINI_MODEL_EX08")
+    or os.environ.get("GEMINI_MODEL")
+    or "gemini-2.0-flash"
+).strip()
+if _prim.removeprefix("models/").startswith("gemini-1.5"):
+    print("Aviso: gemini-1.5* → gemini-2.0-flash")
+    _prim = "gemini-2.0-flash"
+candidatos = gemini_model_candidates(primary=_prim)
+llm = make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.25)
+print("Modelos (ordem):", " → ".join(candidatos))
+
+# --- Célula 2 (markdown) ---
+# ## 1. `RunnableParallel` — vários ramos com o **mesmo** contexto
+# 
+# Corre **várias** sub-cadeias em paralelo sobre o mesmo dicionário de entrada (padrão *fan-out*). O resultado é um **dicionário** com uma chave por ramo — útil para recolher definição, prós e contras, etc., antes de fundir.
+
+# --- Célula 3 (código) ---
+from langchain_core.runnables import RunnableParallel, RunnablePassthrough
+
+p_def = ChatPromptTemplate.from_template(
+    "Define «{topico}» numa frase, em português europeu."
+)
+p_pros = ChatPromptTemplate.from_template(
+    "Lista **duas** vantagens práticas de «{topico}» em bullets muito curtos."
+)
+p_cons = ChatPromptTemplate.from_template(
+    "Lista **um** risco ou limitação de «{topico}» numa única frase."
+)
+
+parallel_tres_vias = RunnableParallel(
+    definicao=(RunnablePassthrough() | p_def | llm | StrOutputParser()),
+vantagens=(RunnablePassthrough() | p_pros | llm | StrOutputParser()),
+limitacao=(RunnablePassthrough() | p_cons | llm | StrOutputParser()),
+)
+
+out = parallel_tres_vias.invoke({"topico": "RunnableParallel no LangChain"})
+for k, v in out.items():
+    print("---", k, "---")
+    print(v[:400] if len(v) > 400 else v)
+
+# --- Célula 4 (markdown) ---
+# ## 2. `RunnablePassthrough.assign` — enriquecer o **estado** passo a passo
+# 
+# Cada `assign` **adiciona chaves** ao dicionário sem apagar as anteriores (enquanto os ramos devolverem dict ou fundirem correctamente). Combina bem com paralelos para, no fim, ter `topico` + várias análises.
+
+# --- Célula 5 (código) ---
+from langchain_core.runnables import RunnableLambda
+
+# O resultado de `RunnableParallel` fica em `paralelo.*`; achatamos para o prompt de síntese.
+def _flatten_para_sintese(d: dict) -> dict:
+    p = d.get("paralelo") or {}
+    return {
+        "topico": d.get("topico", ""),
+        "definicao": p.get("definicao", ""),
+        "vantagens": p.get("vantagens", ""),
+        "limitacao": p.get("limitacao", ""),
+    }
+
+
+cadeia_enriquecida = (
+    RunnablePassthrough.assign(topico=lambda x: (x.get("topico") or "").strip())
+    | RunnablePassthrough.assign(paralelo=parallel_tres_vias)
+    | RunnableLambda(_flatten_para_sintese)
+    | RunnablePassthrough.assign(
+        sintese=(
+            ChatPromptTemplate.from_template(
+                "Tema: {topico}. Junta numa síntese curta (3 bullets) usando:\n"
+                "- Definição:\n{definicao}\n\n- Vantagens:\n{vantagens}\n\n- Limitação:\n{limitacao}"
+            )
+            | llm
+            | StrOutputParser()
+        )
+    )
+)
+
+final = cadeia_enriquecida.invoke({"topico": "orquestração de agentes com LangGraph"})
+print("Chaves:", list(final.keys()))
+print("\n--- síntese ---\n", final.get("sintese", ""))
+
+# --- Célula 6 (markdown) ---
+# ## 3. `operator.itemgetter` — mapear entradas para *prompts* (padrão oficial)
+# 
+# Em vez de `lambda`, usa-se `itemgetter` para extrair campos do dicionário — o mesmo estilo dos exemplos da documentação LangChain.
+
+# --- Célula 7 (código) ---
+from operator import itemgetter
+
+prompt_ctx = ChatPromptTemplate.from_messages(
+    [
+        ("system", "És conciso, em português europeu."),
+        ("human", "Contexto: {contexto}\nPergunta: {pergunta}"),
+    ]
+)
+
+chain_itemgetter = (
+    {
+        "contexto": itemgetter("contexto"),
+        "pergunta": itemgetter("pergunta"),
+    }
+    | prompt_ctx
+    | llm
+    | StrOutputParser()
+)
+
+print(
+    chain_itemgetter.invoke(
+        {
+            "contexto": "LCEL usa o operador | para compor runnables.",
+            "pergunta": "Porque é que o resultado de A | B depende da ordem dos passos?",
+        }
+    )
+)
+
+# --- Célula 8 (markdown) ---
+# ## 4. `RunnableBranch` — ramificação **condicional**
+# 
+# Útil para escolher sub-cadeias consoante o input (tamanho do texto, idioma, *intent*, etc.). O **último** argumento é o ramo **por omissão**. Cada condição é um *runnable* que avalia o input (tipicamente `RunnableLambda`).
+
+# --- Célula 9 (código) ---
+from langchain_core.runnables import RunnableBranch
+
+p_longo = ChatPromptTemplate.from_template(
+    "O texto do utilizador é longo. Resume-o em 2 bullets: {texto}"
+)
+p_curto = ChatPromptTemplate.from_template(
+    "O texto é curto. Reformula com uma pergunta de seguimento: {texto}"
+)
+
+branch_texto = RunnableBranch(
+    (
+        RunnableLambda(lambda d: len((d.get("texto") or "")) > 120),
+        p_longo | llm | StrOutputParser(),
+    ),
+    p_curto | llm | StrOutputParser(),
+)
+
+print("--- curto ---")
+print(branch_texto.invoke({"texto": "LangChain é uma biblioteca Python."}))
+print("--- longo ---")
+print(
+    branch_texto.invoke(
+        {
+            "texto": "O LCEL permite compor chains com paralelismo e ramos. " * 5,
+        }
+    )[:500]
+)
+
+# --- Célula 10 (markdown) ---
+# ## 5. `RunnableLambda` — lógica Python pura dentro da *pipeline*
+# 
+# Encapsula funções (síncronas) como *runnable*: normalização, *feature flags*, validação leve, *chunking*, etc. Evita *lambdas* muito grandes — preferir funções nomeadas em módulos em produção.
+
+# --- Célula 11 (código) ---
+def normalizar_pedido(d: dict) -> dict:
+    q = (d.get("query") or "").strip()
+    return {"query": q, "n_palavras": len(q.split())}
+
+
+chain_norm = (
+    RunnableLambda(normalizar_pedido)
+    | RunnablePassthrough.assign(
+        resposta=(
+            ChatPromptTemplate.from_template(
+                "Explica o termo «{query}» para quem tem {n_palavras} palavras no pedido (meta: 2 frases)."
+            )
+            | llm
+            | StrOutputParser()
+        )
+    )
+)
+
+print(chain_norm.invoke({"query": "  memoização em grafos   "}))
+
+# --- Célula 12 (markdown) ---
+# ## 6. Composição **final**: ramo + paralelo + fundo
+# 
+# 1. Normaliza o tema.
+# 2. Em paralelo: «explicação para leigo» vs «analógia técnica».
+# 3. Junta num único parágrafo de conclusão.
+
+# --- Célula 13 (código) ---
+p_leigo = ChatPromptTemplate.from_template(
+    "Explica «{tema}» como a um colega **não** programador (max. 3 frases)."
+)
+p_tech = ChatPromptTemplate.from_template(
+    "Dá uma **analogia técnica** (APIs, filas, ou grafos) para «{tema}» (max. 3 frases)."
+)
+
+duas_vozes = RunnableParallel(
+    para_leigo=(RunnablePassthrough() | p_leigo | llm | StrOutputParser()),
+    analogia_tech=(RunnablePassthrough() | p_tech | llm | StrOutputParser()),
+)
+
+
+def _merge_vozes(d: dict) -> dict:
+    p = d.get("duas_vozes") or {}
+    return {
+        "tema": d.get("tema", ""),
+        "para_leigo": p.get("para_leigo", ""),
+        "analogia_tech": p.get("analogia_tech", ""),
+    }
+
+
+p_fecho = ChatPromptTemplate.from_template(
+    "Integra os dois pontos de vista num **parágrafo** único:\n"
+    "Vista leiga:\n{para_leigo}\n\nVista técnica:\n{analogia_tech}\n"
+)
+
+pipeline_final = (
+    RunnablePassthrough.assign(tema=lambda x: (x.get("tema") or "").strip())
+    | RunnablePassthrough.assign(duas_vozes=duas_vozes)
+    | RunnableLambda(_merge_vozes)
+    | RunnablePassthrough.assign(conclusao=(p_fecho | llm | StrOutputParser()))
+)
+
+res = pipeline_final.invoke({"tema": "LangGraph como máquina de estados para um agente"})
+print(res.get("conclusao", ""))
+
+# --- Célula 14 (markdown) ---
+# ## 7. Quando **parar** no LCEL e passar ao **LangGraph**
+# 
+# | Caso | Preferir |
+# |------|-----------|
+# | DAG simples, *fan-out*, condição 1 nível | LCEL (`RunnableParallel`, `RunnableBranch`, …) |
+# | Ciclos, *human-in-the-loop*, persistência de passos, *checkpoint* | LangGraph |
+# | Muitos estados e transição explícita | Grafo declarado |
+# 
+# O exercício **03** já usa LangGraph para **ReAct**; aqui o foco é **composição declarativa** sem vértices nomeados.

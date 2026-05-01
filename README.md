@@ -1,6 +1,6 @@
 # Curso — orquestração de agentes com LangChain
 
-Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exercícios **00–03**, **05** e **06** usam a API **Google Gemini**; o **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** aprofunda **LCEL** e *prompt templates*; o **06**, **memória e histórico** na stack LangChain (só Jupyter). Resumo por pasta: [`exercicios/README.md`](exercicios/README.md).
+Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exercícios **00–03** e **05–08** usam a API **Google Gemini**; o **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** introduz **LCEL**; o **06**, **memória**; o **07**, **agente com ~treze *tools*** (rede necessária); o **08**, **cadeias LCEL compostas** (paralelo, ramos, *lambda*). Resumo por pasta: [`exercicios/README.md`](exercicios/README.md).
 
 ## Início rápido
 

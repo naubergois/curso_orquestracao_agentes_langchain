@@ -1,6 +1,6 @@
 # Guia: novos exercícios, Docker e padrões de qualidade
 
-Este documento serve para **pessoas** e para **agentes / IDEs com IA** que criem ou alterem exercícios no repositório. Segue a estrutura **já adoptada** em `exercicios/` (ex.: `00_alo_mundo`, `01_…_com_ecra`, `01_…_sem_ecra`, `03_calculadora`, `03_calculadora_sem_ecra`, `05_prompt_templates_lcel_sem_ecra`, `06_memoria_langchain_sem_ecra`).
+Este documento serve para **pessoas** e para **agentes / IDEs com IA** que criem ou alterem exercícios no repositório. Segue a estrutura **já adoptada** em `exercicios/` (ex.: `00_alo_mundo`, `01_…_com_ecra`, `01_…_sem_ecra`, `03_calculadora`, `03_calculadora_sem_ecra`, `05_prompt_templates_lcel_sem_ecra`, `06_memoria_langchain_sem_ecra`, `07_precos_clima_cotacao`, `07_precos_clima_cotacao_sem_ecra`, `08_chains_complexas_sem_ecra`).
 
 ---
 
@@ -30,9 +30,11 @@ Copiar uma pasta existente **análoga** (ex.: `03_calculadora` para novo Streaml
 ## 3. Variáveis de ambiente (`.env` na raiz)
 
 - **`GEMINI_MODEL`** — exercícios que usam o mesmo modelo “genérico” (01 com ecrã, 03, 00, etc.).
+- **`GEMINI_MODEL_EX02`** — só o exercício 02 (com e sem ecrã podem usar a mesma variável para não colidir com o 01).
 - **`GEMINI_MODEL_EX05`** — opcional no exercício 05 (LCEL); se vazio, usa-se `GEMINI_MODEL`.
 - **`GEMINI_MODEL_EX06`** — opcional no exercício 06 (memória / histórico); se vazio, usa-se `GEMINI_MODEL`.
-- **`GEMINI_MODEL_EX02`** — só o exercício 02 (com e sem ecrã podem usar a mesma variável para não colidir com o 01).
+- **`GEMINI_MODEL_EX07`** — opcional no exercício 07 (preços / clima / câmbio); se vazio, usa-se `GEMINI_MODEL`.
+- **`GEMINI_MODEL_EX08`** — opcional no exercício 08 (cadeias LCEL compostas); se vazio, usa-se `GEMINI_MODEL`.
 - Novo exercício com modelo **dedicado**: definir nome claro (`GEMINI_MODEL_EXNN` ou prefixo do tema) e **documentar em `.env.example`** com comentário e caminho da pasta.
 - Opcionais partilhados: `GEMINI_RETRY_ATTEMPTS`, `GEMINI_RETRY_DELAY_SEC`.
 

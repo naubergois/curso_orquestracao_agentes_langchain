@@ -1,0 +1,11 @@
+# Jupyter — ex. 7 sem ecrã (ReAct: preços, clima Fortaleza, USD/BRL). Streamlit: `07_precos_clima_cotacao`. Ver run_jupyter.sh .
+FROM quay.io/jupyter/minimal-notebook:latest
+
+USER root
+COPY requirements.txt /tmp/requirements-ex07-sem.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex07-sem.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}

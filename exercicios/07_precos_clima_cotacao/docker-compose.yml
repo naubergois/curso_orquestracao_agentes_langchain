@@ -1,0 +1,21 @@
+# Streamlit — ex. 7 (ReAct: preços MLB, clima Fortaleza, USD/BRL).
+name: curso-ex07-precos-clima
+
+services:
+  streamlit:
+    build:
+      context: ..
+      dockerfile: 07_precos_clima_cotacao/Dockerfile
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX07: ${GEMINI_MODEL_EX07:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      PYTHONUNBUFFERED: "1"

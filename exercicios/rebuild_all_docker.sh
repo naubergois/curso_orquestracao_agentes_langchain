@@ -71,7 +71,7 @@ build_stack() {
   compose_build_in "${SCRIPT_DIR}/${exercise_dir}" "${compose_file}"
 }
 
-# Ordem: 00 → 01 (com / sem) → 02 (com / sem) → 03 (com / sem) → 04 (com / sem) → 05–06 (sem ecrã)
+# Ordem: 00 → 01 (com / sem) → 02 (com / sem) → 03 (com / sem) → 04 (com / sem) → 05–08
 build_stack 00_alo_mundo docker-compose.yml
 build_stack 00_alo_mundo docker-compose.jupyter.yml
 build_stack 01_alo_mundo_com_ecra docker-compose.yml
@@ -84,6 +84,9 @@ build_stack 04_fatores_risco_pacientes docker-compose.yml
 build_stack 04_fatores_risco_pacientes_sem_ecra docker-compose.jupyter.yml
 build_stack 05_prompt_templates_lcel_sem_ecra docker-compose.jupyter.yml
 build_stack 06_memoria_langchain_sem_ecra docker-compose.jupyter.yml
+build_stack 07_precos_clima_cotacao docker-compose.yml
+build_stack 07_precos_clima_cotacao_sem_ecra docker-compose.jupyter.yml
+build_stack 08_chains_complexas_sem_ecra docker-compose.jupyter.yml
 
 if [[ "${WITH_EXEMPLOS}" -eq 1 ]]; then
   echo ""

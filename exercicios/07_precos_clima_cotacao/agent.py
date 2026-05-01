@@ -1,0 +1,506 @@
+"""Exercício 07 — agente ReAct com várias ferramentas (preços, clima, câmbio, APIs BR,
+Wikipedia, DuckDuckGo, utilitários). Padrões semelhantes a *tools* LangChain / agentes.
+
+As tools usam sobretudo APIs públicas **sem chave** ou só *stdlib* (rede quando aplicável).
+`langgraph.prebuilt.create_react_agent` + **Gemini** e *fallback* opcional de modelo.
+"""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import operator
+import os
+import re
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+_USER_AGENT = "Mozilla/5.0 (compatible; CursoLangChain/1.0; +educational)"
+
+_MENSAGEM_SISTEMA = """És um assistente em **português europeu** com várias ferramentas (escolhe só as necessárias):
+
+**Mercado & clima & câmbio**
+- `buscar_preco_produto` — Mercado Livre Brasil (anúncios).
+- `clima_em_fortaleza` — tempo actual em Fortaleza (CE).
+- `cotacao_dolar_em_real`, `cotacao_euro_em_real` — USD/BRL e EUR/BRL (AwesomeAPI).
+
+**Conhecimento / pesquisa leve** (como *Wikipedia* / *DuckDuckGo* noutros tutoriais LangChain)
+- `wikipedia_pt_buscar` — resumo curto na Wikipédia em português.
+- `duckduckgo_resumo_instantaneo` — resposta instantânea DuckDuckGo (sem API key).
+
+**Brasil (dados estruturados)**
+- `consultar_cep_brasil` — endereço a partir do CEP (BrasilAPI).
+- `feriados_nacionais_brasil` — feriados nacionais por ano (BrasilAPI).
+
+**Utilitários frequentes em agentes**
+- `calculadora` — expressão numérica segura (+, -, *, /, **, parêntesis).
+- `data_hora_fuso` — data/hora num fuso IANA (ex. `America/Fortaleza`, `Europe/Lisbon`).
+- `converter_celsius_fahrenheit` — conversão de temperatura.
+- `extrair_urls_texto` — lista URLs HTTP(S) presentes num texto.
+- `hash_sha256_texto` — *digest* SHA-256 (padrão «verificação / deduplicação»).
+
+Regras: não inventes números de preço, clima ou câmbio — chama a *tool*. Se uma API falhar, diz-o em uma frase."""
+
+
+def _http_json(url: str, *, timeout: float = 20.0) -> Any:
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _fmt_err(exc: BaseException) -> str:
+    return f"Erro ao consultar API: {exc}"
+
+
+@tool
+def buscar_preco_produto(termo_busca: str) -> str:
+    """Pesquisa preços no Mercado Livre Brasil (MLB). Devolve título e preço dos primeiros anúncios.
+
+    Argumentos:
+        termo_busca: texto da pesquisa (ex.: "fone bluetooth", "arroz 5kg").
+    """
+    q = (termo_busca or "").strip()
+    if not q:
+        return "Indica um termo de busca (ex.: notebook, café em grão)."
+    try:
+        enc = urllib.parse.quote(q)
+        data = _http_json(
+            f"https://api.mercadolibre.com/sites/MLB/search?q={enc}&limit=5"
+        )
+        results = data.get("results") or []
+        if not results:
+            return f"Sem resultados para «{q}»."
+        linhas: list[str] = []
+        for r in results[:5]:
+            price = r.get("price")
+            title = (r.get("title") or "?").strip()
+            curr = r.get("currency_id") or "BRL"
+            permalink = r.get("permalink") or ""
+            linhas.append(f"- {title[:120]} — **{price} {curr}**" + (f" ({permalink})" if permalink else ""))
+        return "\n".join(linhas)
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def clima_em_fortaleza() -> str:
+    """Meteorologia actual em Fortaleza (Ceará): temperatura, humidade relativa, código meteorológico (WMO)."""
+    try:
+        url = (
+            "https://api.open-meteo.com/v1/forecast?"
+            "latitude=-3.7327&longitude=-38.5270"
+            "&current=temperature_2m,relative_humidity_2m,weather_code"
+            "&timezone=America%2FFortaleza"
+        )
+        data = _http_json(url)
+        cur = data.get("current") or {}
+        t = cur.get("temperature_2m")
+        h = cur.get("relative_humidity_2m")
+        code = cur.get("weather_code")
+        return (
+            f"Fortaleza (CE), agora: **{t} °C**, humidade relativa **{h} %**, "
+            f"código meteorológico WMO **{code}** (ver documentação Open-Meteo para o significado do código)."
+        )
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def cotacao_dolar_em_real() -> str:
+    """Cotação do dólar (USD) em real (BRL): compra/venda ou média conforme a fonte (AwesomeAPI)."""
+    try:
+        data = _http_json("https://economia.awesomeapi.com.br/json/last/USD-BRL")
+        pair = data.get("USDBRL") or {}
+        bid = pair.get("bid")
+        ask = pair.get("ask")
+        ts = pair.get("create_date") or pair.get("timestamp")
+        return (
+            f"USD/BRL (referência): **compra ~{bid}**, **venda ~{ask}** reais. "
+            f"Dados da fonte: AwesomeAPI. Momento registado: {ts}."
+        )
+    except Exception as e:
+        return _fmt_err(e)
+
+
+_OPS_CALC = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _avaliar_ast_calc(no: ast.AST) -> float:
+    if isinstance(no, ast.Expression):
+        return _avaliar_ast_calc(no.body)
+    if isinstance(no, ast.Constant):
+        if isinstance(no.value, (int, float)) and not isinstance(no.value, bool):
+            return float(no.value)
+        raise ValueError("Só são permitidos números.")
+    if isinstance(no, ast.BinOp):
+        op = _OPS_CALC.get(type(no.op))
+        if op is None:
+            raise ValueError("Operador não permitido.")
+        return float(op(_avaliar_ast_calc(no.left), _avaliar_ast_calc(no.right)))
+    if isinstance(no, ast.UnaryOp):
+        op = _OPS_CALC.get(type(no.op))
+        if op is None:
+            raise ValueError("Operador unário não permitido.")
+        return float(op(_avaliar_ast_calc(no.operand)))
+    raise ValueError("Expressão não suportada.")
+
+
+def _calcular_seguro(expressao: str) -> float:
+    arvore = ast.parse(expressao.strip(), mode="eval")
+    return _avaliar_ast_calc(arvore)
+
+
+@tool
+def cotacao_euro_em_real() -> str:
+    """Cotação do euro (EUR) em real (BRL), via AwesomeAPI (padrão semelhante a *forex tool*)."""
+    try:
+        data = _http_json("https://economia.awesomeapi.com.br/json/last/EUR-BRL")
+        pair = data.get("EURBRL") or {}
+        bid = pair.get("bid")
+        ask = pair.get("ask")
+        ts = pair.get("create_date") or pair.get("timestamp")
+        return (
+            f"EUR/BRL (referência): **compra ~{bid}**, **venda ~{ask}** reais. "
+            f"Fonte: AwesomeAPI. Registo: {ts}."
+        )
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def wikipedia_pt_buscar(consulta: str) -> str:
+    """Resumo introdutório do primeiro artigo relevante na Wikipédia em português (API MediaWiki).
+
+    Equivalente conceitual ao *WikipediaQueryRun* do ecossistema LangChain (sem pacote extra).
+    """
+    q = (consulta or "").strip()
+    if not q:
+        return "Indica um tema ou palavra-chave."
+    try:
+        enc = urllib.parse.quote(q)
+        sdata = _http_json(
+            f"https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch={enc}"
+            f"&format=json&srlimit=1"
+        )
+        hits = (sdata.get("query") or {}).get("search") or []
+        if not hits:
+            return f"Sem artigos na Wikipédia em português para «{q}»."
+        pageid = hits[0].get("pageid")
+        title = hits[0].get("title") or "?"
+        edata = _http_json(
+            f"https://pt.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1"
+            f"&explaintext=1&format=json&pageids={pageid}"
+        )
+        pages = (edata.get("query") or {}).get("pages") or {}
+        for _pid, page in pages.items():
+            extract = (page.get("extract") or "").strip()
+            if extract:
+                clip = extract[:1800]
+                suf = "…" if len(extract) > 1800 else ""
+                return f"**{title}**\n\n{clip}{suf}"
+        return f"Artigo «{title}» sem texto introdutório disponível."
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def duckduckgo_resumo_instantaneo(consulta: str) -> str:
+    """Resposta *instantânea* DuckDuckGo (sem chave API; por vezes vazia).
+
+    Padrão típico em exemplos de agentes; para resultados completos usar serviços com chave (ex.: Tavily).
+    """
+    q = (consulta or "").strip()
+    if not q:
+        return "Indica uma pergunta ou termo."
+    try:
+        enc = urllib.parse.quote(q)
+        data = _http_json(
+            f"https://api.duckduckgo.com/?q={enc}&format=json&no_html=1&skip_disambig=1"
+        )
+        chunks: list[str] = []
+        if data.get("Heading") and data.get("AbstractText"):
+            chunks.append(f"**{data['Heading']}**\n{data['AbstractText']}")
+        elif data.get("AbstractText"):
+            chunks.append(str(data["AbstractText"]))
+        if data.get("Answer"):
+            chunks.append(str(data["Answer"]))
+        if data.get("Definition"):
+            chunks.append(str(data["Definition"]))
+        if not chunks:
+            return (
+                "Sem resumo instantâneo na DuckDuckGo. Tenta `wikipedia_pt_buscar` ou uma consulta mais curta."
+            )
+        return "\n\n".join(chunks)[:2200]
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def consultar_cep_brasil(cep: str) -> str:
+    """Dados de endereço a partir do CEP (8 dígitos, BrasilAPI — padrão *HTTP structured tool*)."""
+    digits = re.sub(r"\D", "", cep or "")
+    if len(digits) != 8:
+        return "CEP deve ter 8 dígitos (ex.: 01310100 ou 01310-100)."
+    try:
+        data = _http_json(f"https://brasilapi.com.br/api/cep/v2/{digits}")
+        if isinstance(data, dict) and data.get("errors"):
+            return json.dumps(data.get("errors"), ensure_ascii=False)
+        linhas = [
+            f"**CEP:** {data.get('cep')}",
+            f"**Logradouro:** {data.get('street')}",
+            f"**Bairro:** {data.get('neighborhood')}",
+            f"**Cidade / UF:** {data.get('city')} / {data.get('state')}",
+            f"**Fonte dos dados:** {data.get('service', '?')}",
+        ]
+        return "\n".join(l for l in linhas if l)
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def feriados_nacionais_brasil(ano: str | int) -> str:
+    """Lista feriados nacionais do Brasil num ano (BrasilAPI)."""
+    try:
+        y = int(ano)
+    except (TypeError, ValueError):
+        return "Indica o ano inteiro (ex.: 2026)."
+    if y < 1900 or y > 2100:
+        return "Use um ano entre 1900 e 2100."
+    try:
+        items = _http_json(f"https://brasilapi.com.br/api/feriados/v1/{y}")
+        if not isinstance(items, list):
+            return str(items)
+        if not items:
+            return f"Lista vazia para {y}."
+        lines = [f"- **{it.get('date')}** — {it.get('name')} (`{it.get('type')}`)" for it in items]
+        return "\n".join(lines)
+    except Exception as e:
+        return _fmt_err(e)
+
+
+@tool
+def calculadora(expressao: str) -> str:
+    """Expressão numérica segura: +, -, *, /, ** e parêntesis (padrão *calculator tool* em ReAct)."""
+    try:
+        valor = _calcular_seguro(expressao)
+        if valor == int(valor):
+            return str(int(valor))
+        return str(round(valor, 10))
+    except Exception as e:
+        return f"Erro ao calcular: {e}"
+
+
+@tool
+def data_hora_fuso(nome_fuso: str = "America/Fortaleza") -> str:
+    """Data e hora actuais num fuso **IANA** (ex.: `America/Fortaleza`, `Europe/Lisbon`, `UTC`)."""
+    nz = (nome_fuso or "").strip() or "America/Fortaleza"
+    try:
+        tz = ZoneInfo(nz)
+    except Exception:
+        return f"Fuso inválido: `{nz}`. Ex.: America/Sao_Paulo, Europe/Lisbon."
+    agora = datetime.now(tz)
+    return agora.isoformat()
+
+
+@tool
+def converter_celsius_fahrenheit(valor_em_celsius: float) -> str:
+    """Converte **Celsius** para **Fahrenheit** (tool de domínio numérico simples)."""
+    try:
+        c = float(valor_em_celsius)
+    except (TypeError, ValueError):
+        return "Indica um número em °C (ex.: 30)."
+    fahrenheit = c * 9.0 / 5.0 + 32.0
+    return f"{c} °C ≈ **{fahrenheit:.2f} °F** (F = C×9/5 + 32)."
+
+
+@tool
+def extrair_urls_texto(texto: str) -> str:
+    """Lista URLs `http(s)` encontradas no texto (*regex*, comum em *pre-processing* para agentes)."""
+    urls = re.findall(r"https?://[^\s\]\}\">'\"]+", texto or "")
+    if not urls:
+        return "Nenhuma URL http(s) encontrada."
+    uniq: list[str] = []
+    for u in urls:
+        if u not in uniq:
+            uniq.append(u)
+        if len(uniq) >= 40:
+            break
+    return "\n".join(f"- {u}" for u in uniq)
+
+
+@tool
+def hash_sha256_texto(texto: str) -> str:
+    """*Hex digest* SHA-256 do texto UTF-8 (padrão verificação / *cache key*)."""
+    return hashlib.sha256((texto or "").encode("utf-8")).hexdigest()
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for directory in (here.parent, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            return
+
+
+_load_local_env()
+
+_DEFAULT_GEMINI = "gemini-2.0-flash"
+_TOOLS = (
+    buscar_preco_produto,
+    clima_em_fortaleza,
+    cotacao_dolar_em_real,
+    cotacao_euro_em_real,
+    wikipedia_pt_buscar,
+    duckduckgo_resumo_instantaneo,
+    consultar_cep_brasil,
+    feriados_nacionais_brasil,
+    calculadora,
+    data_hora_fuso,
+    converter_celsius_fahrenheit,
+    extrair_urls_texto,
+    hash_sha256_texto,
+)
+
+
+def _ensure_api_key() -> None:
+    key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "Defina GOOGLE_API_KEY ou GEMINI_API_KEY no `.env` na raiz do repositório."
+        )
+    os.environ.setdefault("GOOGLE_API_KEY", key)
+
+
+def _ensure_exercicios_on_path() -> None:
+    here = Path(__file__).resolve().parent
+    for p in (here, here.parent):
+        if (p / "lib_llm_fallback.py").is_file():
+            s = str(p)
+            if s not in sys.path:
+                sys.path.insert(0, s)
+            return
+
+
+def _modelo_primario() -> str:
+    nome = (
+        os.environ.get("GEMINI_MODEL_EX07")
+        or os.environ.get("GEMINI_MODEL")
+        or _DEFAULT_GEMINI
+    ).strip() or _DEFAULT_GEMINI
+    base = nome.removeprefix("models/")
+    if base.startswith("gemini-1.5"):
+        print(
+            "Aviso: modelos `gemini-1.5*` não são usados neste curso → "
+            f"`{_DEFAULT_GEMINI}`. Atualize GEMINI_MODEL* no `.env`.",
+            file=sys.stderr,
+        )
+        return _DEFAULT_GEMINI
+    return nome
+
+
+def _modelo_efetivo_lista() -> str:
+    _ensure_exercicios_on_path()
+    from lib_llm_fallback import gemini_model_candidates
+
+    return " → ".join(gemini_model_candidates(primary=_modelo_primario()))
+
+
+def build_chat_model() -> Any:
+    _ensure_api_key()
+    _ensure_exercicios_on_path()
+    from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+
+    candidatos = gemini_model_candidates(primary=_modelo_primario())
+    return make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.2)
+
+
+def build_graph():
+    return create_react_agent(
+        build_chat_model(),
+        tools=list(_TOOLS),
+        prompt=SystemMessage(content=_MENSAGEM_SISTEMA),
+        checkpointer=MemorySaver(),
+    )
+
+
+def _eh_429(exc: BaseException) -> bool:
+    t = str(exc).upper()
+    return "429" in t or "RESOURCE_EXHAUSTED" in t
+
+
+def proxima_mensagem_utilizador(
+    graph,
+    mensagem: str,
+    thread_id: str,
+) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+    max_t = max(1, int(os.environ.get("GEMINI_RETRY_ATTEMPTS", "5")))
+    base = max(0.5, float(os.environ.get("GEMINI_RETRY_DELAY_SEC", "2")))
+    ultimo: BaseException | None = None
+
+    for tentativa in range(max_t):
+        try:
+            graph.invoke({"messages": [HumanMessage(content=mensagem)]}, config)
+            return
+        except Exception as e:
+            ultimo = e
+            if _eh_429(e) and tentativa < max_t - 1:
+                time.sleep(min(base * (2**tentativa), 60.0))
+                continue
+            break
+
+    assert ultimo is not None
+    if _eh_429(ultimo):
+        raise RuntimeError(
+            "API Gemini (429). Espere ou ajuste GEMINI_MODEL / GEMINI_MODEL_EX07 no `.env`. "
+            f"Modelos tentados: `{_modelo_efetivo_lista()}`."
+        ) from ultimo
+    raise ultimo
+
+
+def obter_mensagens_do_thread(graph, thread_id: str):
+    config = {"configurable": {"thread_id": thread_id}}
+    snap = graph.get_state(config)
+    if not snap or not snap.values:
+        return []
+    return list(snap.values.get("messages") or [])
+
+
+def texto_para_mostrar(msg) -> str | None:
+    if isinstance(msg, HumanMessage):
+        c = msg.content
+        return c if isinstance(c, str) else str(c)
+    if isinstance(msg, AIMessage):
+        parts: list[str] = []
+        if getattr(msg, "tool_calls", None):
+            nomes = [tc.get("name", "?") for tc in msg.tool_calls]
+            parts.append(f"*(ferramentas: {', '.join(nomes)})*")
+        c = msg.content
+        if c:
+            parts.append(c if isinstance(c, str) else str(c))
+        return "\n\n".join(parts) if parts else None
+    if isinstance(msg, ToolMessage):
+        return f"🔧 `{msg.name}` → {msg.content}"
+    return None

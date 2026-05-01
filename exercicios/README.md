@@ -2,10 +2,11 @@
 
 Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Docker) e **sem ecrã** (`…_sem_ecra`, Jupyter Lab + Docker), mais utilitários partilhados.
 
-- **Gemini (Google AI):** exercícios **00–03** — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** (ver `.env.example`).
+- **Gemini (Google AI):** exercícios **00–03** e **05–08** — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
 - **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
 - **Ex. 05 (só Jupyter):** LCEL e *prompt templates* — opcional **`GEMINI_MODEL_EX05`**, senão **`GEMINI_MODEL`**; **`GEMINI_MODEL_FALLBACKS`** opcional (ver GUIA §9.2).
 - **Ex. 06 (só Jupyter):** memória / histórico — `RunnableWithMessageHistory`, lista manual, `trim_messages`; opcional **`GEMINI_MODEL_EX06`**.
+- **Ex. 08 (só Jupyter):** LCEL avançado — `RunnableParallel`, `RunnablePassthrough.assign`, `RunnableBranch`, `RunnableLambda`, `itemgetter`; opcional **`GEMINI_MODEL_EX08`**.
 
 ## Início rápido
 
@@ -25,6 +26,7 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 | `update_notebooks.sh` / `.ps1` | Limpa **outputs** dos `.ipynb` em `exercicios/` (útil antes de commit). |
 | `lib_docker_exercicios.sh` / `.ps1` | Usado pelos `run_*` — para stacks paralelos não ficarem a competir pela mesma porta. |
 | `gerar_codigo_completo_txt.py` | Gera `CODIGO_COMPLETO.txt` a partir dos cadernos `…_sem_ecra`. |
+| `_sync_nb_ex07.py` | Actualiza `07_precos_clima_cotacao_sem_ecra/exercicio_7_sem_ecra.ipynb` a partir de `07_precos_clima_cotacao/agent.py` (após editar o agente). |
 
 ## O que faz cada exercício
 
@@ -41,6 +43,9 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 | | `04_fatores_risco_pacientes_sem_ecra` | Mesmo **cenário BD + agente DeepSeek** no **Jupyter**; `init_db/` no Docker e recuperação de schema em volume vazio. |
 | **05** | `05_prompt_templates_lcel_sem_ecra` | **LCEL**: `ChatPromptTemplate`, composição em cadeia de *runnables* (operador *pipe* entre passos), `StrOutputParser`, `partial`, `RunnablePassthrough.assign`, `RunnableParallel` — *pipelines* sem agente. **Só Jupyter.** |
 | **06** | `06_memoria_langchain_sem_ecra` | **Memória / histórico**: conversa sem estado vs lista manual vs **`RunnableWithMessageHistory`**; **`trim_messages`** para limitar contexto; panorama (LangGraph, RAG). **Só Jupyter.** |
+| **07** | `07_precos_clima_cotacao` | **Agente ReAct** com **treze *tools*** — preços (MLB), clima (Fortaleza), USD/BRL e EUR/BRL, Wikipédia PT, DuckDuckGo instantâneo, CEP e feriados (BrasilAPI), calculadora, data/hora por fuso, conversão °C→°F, extração de URLs, SHA-256 (padrões típicos LangChain / tutoriais). Streamlit; **Internet**. |
+| | `07_precos_clima_cotacao_sem_ecra` | O mesmo conjunto de *tools* no **Jupyter** (caderno alinhado ao `agent.py`). |
+| **08** | `08_chains_complexas_sem_ecra` | **Cadeias LCEL compostas:** paralelo, `assign`, ramificação condicional, `Lambda`, `itemgetter`, *pipeline* que funde vários ramos — quando usar LangGraph vs LCEL. **Só Jupyter.** |
 
 **Legenda:** *com ecrã* → Streamlit + `docker-compose.yml`; *sem ecrã* → Jupyter + `docker-compose.jupyter.yml` (quando existir par, o tema é o mesmo; muda só a interface).
 

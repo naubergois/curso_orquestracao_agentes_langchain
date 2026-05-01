@@ -202,3 +202,6 @@ print("Primeira (sistema):", cortado[0].type)
 # | **RAG / vectorstore** | «Memória» **semântica** sobre documentos — outro exercício ou módulo. |
 # 
 # *Legado:* `ConversationBufferMemory` + `LLMChain` (API antiga). Neste curso preferimos **LCEL** + histórico explícito ou LangGraph para agentes.
+
+# --- Célula 11 (código) ---
+# --- Célula 12 (código) ---
