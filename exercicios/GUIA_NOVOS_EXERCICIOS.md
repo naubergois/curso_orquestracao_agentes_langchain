@@ -1,6 +1,6 @@
 # Guia: novos exercícios, Docker e padrões de qualidade
 
-Este documento serve para **pessoas** e para **agentes / IDEs com IA** que criem ou alterem exercícios no repositório. Segue a estrutura **já adoptada** em `exercicios/` (ex.: `00_alo_mundo`, `01_…_com_ecra`, `01_…_sem_ecra`, `03_calculadora`, `03_calculadora_sem_ecra`).
+Este documento serve para **pessoas** e para **agentes / IDEs com IA** que criem ou alterem exercícios no repositório. Segue a estrutura **já adoptada** em `exercicios/` (ex.: `00_alo_mundo`, `01_…_com_ecra`, `01_…_sem_ecra`, `03_calculadora`, `03_calculadora_sem_ecra`, `05_prompt_templates_lcel_sem_ecra`).
 
 ---
 
@@ -30,6 +30,7 @@ Copiar uma pasta existente **análoga** (ex.: `03_calculadora` para novo Streaml
 ## 3. Variáveis de ambiente (`.env` na raiz)
 
 - **`GEMINI_MODEL`** — exercícios que usam o mesmo modelo “genérico” (01 com ecrã, 03, 00, etc.).
+- **`GEMINI_MODEL_EX05`** — opcional no exercício 05 (LCEL); se vazio, usa-se `GEMINI_MODEL`.
 - **`GEMINI_MODEL_EX02`** — só o exercício 02 (com e sem ecrã podem usar a mesma variável para não colidir com o 01).
 - Novo exercício com modelo **dedicado**: definir nome claro (`GEMINI_MODEL_EXNN` ou prefixo do tema) e **documentar em `.env.example`** com comentário e caminho da pasta.
 - Opcionais partilhados: `GEMINI_RETRY_ATTEMPTS`, `GEMINI_RETRY_DELAY_SEC`.
@@ -141,6 +142,22 @@ Quando o exercício usa **LangGraph / ferramentas + LLM**, cada turno pode demor
 
 **Referência no repositório:** `exercicios/04_fatores_risco_pacientes/` (Streamlit + sidebar «um paciente de cada vez» + progresso por updates; **LLM: DeepSeek** via `DEEPSEEK_API_KEY`).
 
+### 9.2 *Fallback* de modelos (Gemini e DeepSeek, a partir do exercício 5)
+
+Objetivo: quando o primário falha com **nome inválido**, **404**, **403**, **429** / **`RESOURCE_EXHAUSTED`**, ou erros típicos de «modelo não disponível», tentar **outro identificador** na mesma API (outro *bucket* de quota ou outro SKU).
+
+| Peça | Função |
+|------|--------|
+| **`make_gemini_chat_with_runtime_fallback` / `make_deepseek_chat_with_runtime_fallback`** | Empilham modelos com **`Runnable.with_fallbacks`** do LangChain: **cada** `invoke` tenta o seguinte se o anterior lançar excepção (incl. **429**). O exercício 5 usa o primeiro; o exercício 4 (DeepSeek) também. |
+| **`GEMINI_MODEL_FALLBACKS`** | Lista CSV opcional (ex.: `gemini-2.5-flash,gemini-2.0-flash-lite`) **depois** do primário (`GEMINI_MODEL_EX05` ou `GEMINI_MODEL`). |
+| **`DEEPSEEK_MODEL_FALLBACKS`** | Idem para DeepSeek (ex.: `deepseek-reasoner,deepseek-chat`). |
+| **`LLM_FALLBACK_SKIP_SMOKE_TEST`** | Se `1` / `true` / `yes`, **não** é feito o `invoke` curto de teste por modelo — usa logo o primeiro nome da lista (poupa chamadas; útil se já validou os nomes). |
+
+- **Listar nomes válidos:** o exercício 5 inclui células que chamam a API (Gemini: `client.models.list()`; DeepSeek: `GET …/v1/models`). Use isso para preencher `.env` e reduzir `ChatGoogleGenerativeAIError` / erros OpenAI-compatíveis por modelo inexistente.
+- **DeepSeek no Streamlit (ex. 4):** o `Dockerfile` usa **contexto de build `exercicios/`** para copiar `lib_llm_fallback.py` para a imagem junto de `agent.py`.
+- **Jupyter:** `Path.cwd().parent` aponta para `exercicios/` — import de `lib_llm_fallback` após `sys.path.insert`.
+- **429 Google:** mudar de modelo **pode** ajudar; se todos falharem, o problema é quota global — espere e consulte [limites Gemini](https://ai.google.dev/gemini-api/docs/rate-limits). Para DeepSeek, ver a documentação da plataforma.
+
 ## 10. Checklist — novo par de exercícios (com + sem ecrã)
 
 - [ ] Pastas `NN_…_com_ecra` e `NN_…_sem_ecra` com nomes consistentes.
@@ -172,6 +189,7 @@ Quando o exercício usa **LangGraph / ferramentas + LLM**, cada turno pode demor
 | Persona fixa, sem histórico no modelo | `02_nerd_sarcastico_com_ecra` | `02_nerd_sarcastico_sem_ecra` |
 | LangGraph / tools | `03_calculadora` | `03_calculadora_sem_ecra` |
 | Agente + DB / muitos registos (progresso, um-a-um); LLM **DeepSeek** | `04_fatores_risco_pacientes` | `04_fatores_risco_pacientes_sem_ecra` |
+| LCEL + *prompt templates* (só Jupyter) | — | `05_prompt_templates_lcel_sem_ecra` |
 | Entry `main.py` + Jupyter | `00_alo_mundo` | `exercicio_0_sem_ecra.ipynb` |
 
 ---

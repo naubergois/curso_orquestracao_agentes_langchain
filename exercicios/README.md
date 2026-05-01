@@ -3,7 +3,8 @@
 Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Docker) e **sem ecrã** (`…_sem_ecra`, Jupyter Lab + Docker), mais utilitários partilhados.
 
 - **Gemini (Google AI):** exercícios **00–03** — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** (ver `.env.example`).
-- **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL` (predef.: `deepseek-chat`), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
+- **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
+- **Ex. 05 (só Jupyter):** LCEL e *prompt templates* — opcional **`GEMINI_MODEL_EX05`**, senão **`GEMINI_MODEL`**; **`GEMINI_MODEL_FALLBACKS`** opcional (ver GUIA §9.2).
 
 ## Início rápido
 
@@ -18,6 +19,7 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 
 | Script | Descrição |
 |--------|-----------|
+| `lib_llm_fallback.py` | *Fallback* de modelos (Gemini / DeepSeek) e listagem via API — GUIA §9.2. |
 | `rebuild_all_docker.sh` / `.ps1` | Reconstrói as imagens de **todos** os composes dos exercícios (`build --pull`). |
 | `update_notebooks.sh` / `.ps1` | Limpa **outputs** dos `.ipynb` em `exercicios/` (útil antes de commit). |
 | `lib_docker_exercicios.sh` / `.ps1` | Usado pelos `run_*` — para stacks paralelos não ficarem a competir pela mesma porta. |
@@ -32,6 +34,7 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 - `03_calculadora_sem_ecra` — mesmo exercício em Jupyter (`./run.sh`).
 - `04_fatores_risco_pacientes` — agente + PostgreSQL (dados fictícios); **DeepSeek** no Streamlit (barra de progresso, um paciente de cada vez).
 - `04_fatores_risco_pacientes_sem_ecra` — mesmo tema em Jupyter + Postgres + **DeepSeek** (`run_jupyter.sh`). A pasta `init_db/` inicializa o schema no Docker; a **primeira célula** do caderno pode aplicar o mesmo schema se a base tiver sido criada vazia (volume antigo).
+- `05_prompt_templates_lcel_sem_ecra` — `ChatPromptTemplate`, operador `|`, `StrOutputParser`, `partial`, `RunnablePassthrough.assign`, `RunnableParallel` (`./run.sh` / `run_jupyter.sh`).
 
 ## Exemplo isolado
 

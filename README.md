@@ -1,6 +1,6 @@
 # Curso — orquestração de agentes com LangChain
 
-Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exemplos 00–03 usam a API **Google Gemini**; o exercício **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios.
+Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exemplos 00–03 e **05** usam a API **Google Gemini**; o exercício **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** foca **LCEL** e *prompt templates* (apenas Jupyter).
 
 ## Início rápido
 

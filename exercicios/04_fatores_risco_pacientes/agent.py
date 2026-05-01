@@ -12,13 +12,13 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import psycopg2
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from psycopg2.extras import RealDictCursor
 
@@ -52,6 +52,23 @@ def _load_local_env() -> None:
 _load_local_env()
 
 _DEFAULT_DEEPSEEK = "deepseek-chat"
+
+# Nome do modelo DeepSeek após `pick_working_deepseek_llm` (mensagens de erro / diagnóstico).
+_DEEPSEEK_RESOLVIDO: str | None = None
+
+
+def _ensure_exercicios_on_path() -> None:
+    here = Path(__file__).resolve().parent
+    for p in (here, here.parent):
+        if (p / "lib_llm_fallback.py").is_file():
+            s = str(p)
+            if s not in sys.path:
+                sys.path.insert(0, s)
+            return
+
+
+def _modelo_efetivo() -> str:
+    return _DEEPSEEK_RESOLVIDO if _DEEPSEEK_RESOLVIDO else _modelo()
 
 
 def _database_url() -> str:
@@ -136,14 +153,20 @@ def _api_base() -> str:
     return (os.environ.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip().rstrip("/")
 
 
-def build_chat_model() -> ChatOpenAI:
+def build_chat_model() -> Any:
+    global _DEEPSEEK_RESOLVIDO
     _ensure_deepseek_key()
+    _ensure_exercicios_on_path()
+    from lib_llm_fallback import deepseek_model_candidates, make_deepseek_chat_with_runtime_fallback
+
     key = os.environ["DEEPSEEK_API_KEY"].strip()
-    return ChatOpenAI(
-        model=_modelo(),
-        temperature=0.2,
+    nomes = deepseek_model_candidates(_modelo())
+    _DEEPSEEK_RESOLVIDO = " → ".join(nomes)
+    return make_deepseek_chat_with_runtime_fallback(
+        nomes,
         api_key=key,
         base_url=_api_base(),
+        temperature=0.2,
     )
 
 
@@ -237,7 +260,7 @@ def proxima_mensagem_utilizador(
             "(2) use o fluxo **um paciente de cada vez**; "
             "(3) no `.env`, aumente `LLM_RETRY_ATTEMPTS` e `LLM_RETRY_DELAY_SEC` (ou as variáveis `GEMINI_RETRY_*` legadas); "
             "(4) confirme `DEEPSEEK_MODEL` e a chave em [DeepSeek](https://platform.deepseek.com). "
-            f"Modelo em uso: `{_modelo()}`."
+            f"Modelo em uso: `{_modelo_efetivo()}`."
         ) from ultimo
     raise ultimo
 

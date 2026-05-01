@@ -19,7 +19,7 @@ st.set_page_config(page_title="Ex. 04 — Fatores de risco", page_icon="🩺")
 st.title("Exercício 04 — Pacientes e fatores de risco")
 st.caption(
     "LangChain `create_agent` + **DeepSeek** (`ChatOpenAI`) + PostgreSQL. **Recomendado:** sidebar "
-    "«Um paciente de cada vez». Variáveis: `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL` (predef.: deepseek-chat). "
+    "«Um paciente de cada vez». Variáveis: `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional). "
     "Porta **8501**; Postgres no host **5433**."
 )
 

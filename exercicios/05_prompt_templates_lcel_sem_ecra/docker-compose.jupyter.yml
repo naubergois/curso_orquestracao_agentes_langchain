@@ -1,0 +1,29 @@
+# Jupyter — ex. 5 sem ecrã (LCEL + prompt templates). Ver run_jupyter.sh .
+name: curso-ex05-sem-jupyter
+
+services:
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    env_file:
+      - ../../.env
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX05: ${GEMINI_MODEL_EX05:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      PYTHONUNBUFFERED: "1"
+      JUPYTER_TOKEN: ""
+    volumes:
+      - ../../:/home/jovyan/work/repo:rw
+      - ../../.env:/home/jovyan/work/repo/.env:ro
+    working_dir: /home/jovyan/work/repo/exercicios/05_prompt_templates_lcel_sem_ecra
+    command:
+      - start-notebook.sh
+      - --ServerApp.token=
+      - --ServerApp.password=
+      - --ServerApp.ip=0.0.0.0

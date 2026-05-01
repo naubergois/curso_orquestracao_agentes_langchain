@@ -28,7 +28,7 @@ tqdm>=4.66.0,<5
 # 
 # `langchain.agents.create_agent` + **`ChatOpenAI`** (API [DeepSeek](https://platform.deepseek.com)) + **`stream`/`tqdm`**.
 # 
-# Variáveis: **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL` (predef.: `deepseek-chat`), `DEEPSEEK_API_BASE` (predef.: `https://api.deepseek.com`).
+# Variáveis: **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL` (predef.: `deepseek-chat`), `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE` (predef.: `https://api.deepseek.com`).
 # 
 # **Um paciente por pedido** (GUIA §9.1). **429:** aumente `LLM_RETRY_*` ou espere.
 # 
@@ -47,16 +47,20 @@ import psycopg2
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from psycopg2.extras import RealDictCursor
 from tqdm.auto import tqdm
 
 _DEFAULT = "deepseek-chat"
+_DEEPSEEK_USADO: str | None = None
 
 
 def _modelo() -> str:
     return (os.environ.get("DEEPSEEK_MODEL") or _DEFAULT).strip() or _DEFAULT
+
+
+def _modelo_efetivo() -> str:
+    return _DEEPSEEK_USADO if _DEEPSEEK_USADO else _modelo()
 
 
 def _api_base() -> str:
@@ -150,11 +154,19 @@ def obter_ficha_paciente(paciente_id: int) -> str:
 
 
 def build_chat_model():
-    return ChatOpenAI(
-        model=_modelo(),
-        temperature=0.2,
+    global _DEEPSEEK_USADO
+    _ex = Path.cwd().resolve().parent
+    if str(_ex) not in sys.path:
+        sys.path.insert(0, str(_ex))
+    from lib_llm_fallback import deepseek_model_candidates, make_deepseek_chat_with_runtime_fallback
+
+    nomes = deepseek_model_candidates(_modelo())
+    _DEEPSEEK_USADO = " → ".join(nomes)
+    return make_deepseek_chat_with_runtime_fallback(
+        nomes,
         api_key=key,
         base_url=_api_base(),
+        temperature=0.2,
     )
 
 
@@ -233,7 +245,7 @@ def invocar_agente(graph, mensagem: str, thread_id: str) -> None:
     if _eh_429(ultimo):
         raise RuntimeError(
             "API **429** (limite). Espere; use um paciente por pedido; aumente LLM_RETRY_* no `.env`. "
-            f"Modelo: {_modelo()}."
+            f"Modelo: {_modelo_efetivo()}."
         ) from ultimo
     raise ultimo
 
@@ -268,7 +280,7 @@ def imprimir_thread(graph, thread_id: str) -> None:
             print(t, flush=True)
 
 
-print(f"Modelo DeepSeek: {_modelo()}", flush=True)
+print(f"Modelo DeepSeek (env): {_modelo()} | após fallback: ver após build_graph() — {_DEEPSEEK_USADO or '—'}", flush=True)
 print(f"DATABASE_URL: {_database_url()[:50]}…", flush=True)
 
 # --- Célula 2 (código) ---
@@ -276,3 +288,5 @@ thread_id = "demo-deepseek"
 g = build_graph()
 invocar_agente(g, mensagem_analise_um_paciente(2), thread_id)
 imprimir_thread(g, thread_id)
+
+# --- Célula 3 (código) ---

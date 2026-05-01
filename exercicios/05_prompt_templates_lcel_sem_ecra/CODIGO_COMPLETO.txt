@@ -1,0 +1,191 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 05_prompt_templates_lcel_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+
+
+================================================================================
+# FICHEIRO: exercicio_5_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 5 — sem ecrã (LCEL + *prompt templates* + *fallback* de modelos)
+# 
+# `ChatPromptTemplate`, operador **`|`** (*RunnableSequence*), `StrOutputParser`, `partial`, `RunnablePassthrough.assign` e `RunnableParallel`.
+# 
+# **Fallback em tempo real:** `make_gemini_chat_with_runtime_fallback` usa `with_fallbacks` do LangChain — **em cada** `invoke` da cadeia, se o modelo actual der **429** / `RESOURCE_EXHAUSTED` (ou outro erro recuperável), tenta-se o **seguinte** da lista automaticamente. Variáveis: **`GEMINI_MODEL_EX05`** ou **`GEMINI_MODEL`**, **`GEMINI_MODEL_FALLBACKS`** (CSV). Opcional: **`LLM_FALLBACK_SKIP_SMOKE_TEST`** só afecta `pick_working_*` (diagnóstico), não esta cadeia.
+# 
+# **Listar modelos:** células abaixo (Gemini; DeepSeek se existir `DEEPSEEK_API_KEY`) para copiar nomes exactos para o `.env`.
+# 
+# **Docker:** `./run.sh`. Chave **`GOOGLE_API_KEY`** na raiz. Ver **GUIA §9.2**.
+
+# --- Célula 1 (código) ---
+import os
+import sys
+from pathlib import Path
+
+key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+if not key:
+    raise RuntimeError("Defina GOOGLE_API_KEY (`.env` na raiz ou Docker).")
+os.environ.setdefault("GOOGLE_API_KEY", key)
+
+_exercicios = Path.cwd().resolve().parent
+if str(_exercicios) not in sys.path:
+    sys.path.insert(0, str(_exercicios))
+
+from lib_llm_fallback import (
+    gemini_model_candidates,
+    list_deepseek_model_ids,
+    list_gemini_text_models,
+    make_gemini_chat_with_runtime_fallback,
+)
+
+candidatos_gemini = gemini_model_candidates(ex05=True)
+print("Ordem de tentativas Gemini:", ", ".join(candidatos_gemini), flush=True)
+
+# --- Célula 2 (markdown) ---
+# ## Listar modelos (evita `Error calling model '…'`)
+# 
+# - **Gemini:** cliente Google GenAI (`client.models.list()`), filtrado para geração de texto.
+# - **DeepSeek:** `GET /v1/models` na `DEEPSEEK_API_BASE` — alinhado com o exercício 4.
+
+# --- Célula 3 (código) ---
+try:
+    nomes = list_gemini_text_models()
+    print(f"Gemini — {len(nomes)} modelo(s). Primeiros 30:")
+    for n in nomes[:30]:
+        print(" ", n)
+    if len(nomes) > 30:
+        print("  …")
+except Exception as e:
+    print(f"Não foi possível listar Gemini: {e}", flush=True)
+
+dk = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+if dk:
+    try:
+        base = (os.environ.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip().rstrip("/")
+        ids = list_deepseek_model_ids(api_key=dk, base_url=base)
+        print(f"\nDeepSeek — {len(ids)} id(s). Exemplos:")
+        for n in ids[:20]:
+            print(" ", n)
+    except Exception as e:
+        print(f"DeepSeek list: {e}", flush=True)
+else:
+    print("\n(Defina DEEPSEEK_API_KEY para listar modelos DeepSeek.)", flush=True)
+
+# --- Célula 4 (markdown) ---
+# ## LLM Gemini com *fallback* em **cada** pedido (`with_fallbacks`)
+# 
+# `make_gemini_chat_with_runtime_fallback` empilha vários `ChatGoogleGenerativeAI`; o LangChain tenta o seguinte **no mesmo** `chain.invoke(...)` quando o anterior falha (ex.: **429** no `gemini-2.0-flash` e sucesso no `gemini-2.5-flash`). Se **todos** falharem, espere ou veja [limites](https://ai.google.dev/gemini-api/docs/rate-limits).
+
+# --- Célula 5 (código) ---
+llm = make_gemini_chat_with_runtime_fallback(candidatos_gemini, temperature=0.3)
+print(
+    "LLM com fallback em tempo de execução (ordem por invoke):",
+    ", ".join(candidatos_gemini),
+    flush=True,
+)
+
+# --- Célula 6 (markdown) ---
+# ## 1. Cadeia LCEL: `prompt | modelo | parser`
+
+# --- Célula 7 (código) ---
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "És um formador breve em português europeu. Usa no máximo 3 frases."),
+        ("human", "Explica o conceito: {topico}"),
+    ]
+)
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({"topico": "o operador pipe em LangChain LCEL"}))
+
+# --- Célula 8 (markdown) ---
+# ## 2. `partial` — variáveis fixas no template
+
+# --- Célula 9 (código) ---
+prompt_tom = ChatPromptTemplate.from_messages(
+    [
+        ("system", "Responde sempre em {lingua}, tom: {tom}."),
+        ("human", "{pedido}"),
+    ]
+)
+prompt_curto = prompt_tom.partial(lingua="português europeu", tom="didáctico e calmo")
+
+chain_tom = prompt_curto | llm | StrOutputParser()
+print(chain_tom.invoke({"pedido": "O que é um ChatPromptTemplate?"}))
+
+# --- Célula 10 (markdown) ---
+# ## 3. `RunnablePassthrough.assign` — enriquecer o dicionário de entrada
+
+# --- Célula 11 (código) ---
+from langchain_core.runnables import RunnablePassthrough
+
+prompt_ctx = ChatPromptTemplate.from_messages(
+    [
+        ("system", "És um mentor de estudo. Sê concreto."),
+        (
+            "human",
+            "Contexto do aluno: {contexto_aluno}\n\nTarefa: {tarefa}",
+        ),
+    ]
+)
+
+def montar_contexto(topico: str) -> str:
+    return f"Aluno a estudar «{topico}» pela primeira vez."
+
+chain_ctx = (
+    RunnablePassthrough.assign(
+        contexto_aluno=lambda x: montar_contexto(x["topico"]),
+        tarefa=lambda x: f"Dá um exemplo mínimo relacionado com «{x['topico']}».",
+    )
+    | prompt_ctx
+    | llm
+    | StrOutputParser()
+)
+
+print(chain_ctx.invoke({"topico": "RunnableSequence"}))
+
+# --- Célula 12 (markdown) ---
+# ## 4. `RunnableParallel` — vários ramos com o mesmo input
+
+# --- Célula 13 (código) ---
+from langchain_core.runnables import RunnableParallel
+
+p_directo = ChatPromptTemplate.from_messages(
+    [("human", "Define numa frase: {termo}")]
+)
+p_aluno = ChatPromptTemplate.from_messages(
+    [
+        (
+            "human",
+            "Explica como a um aluno do 9.º ano, numa frase: {termo}",
+        )
+    ]
+)
+
+ramos = RunnableParallel(
+    definicao=p_directo | llm | StrOutputParser(),
+    explicacao_simples=p_aluno | llm | StrOutputParser(),
+)
+
+termo = "cadeia de prompts (LCEL)"
+resultado = ramos.invoke({"termo": termo})
+for k, v in resultado.items():
+    print(f"--- {k} ---\n{v}\n")
+
+# --- Célula 14 (código) ---
