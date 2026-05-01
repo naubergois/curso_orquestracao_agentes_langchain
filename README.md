@@ -1,6 +1,6 @@
 # Curso — orquestração de agentes com LangChain
 
-Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exercícios **00–03** e **05–08** usam a API **Google Gemini**; o **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** introduz **LCEL**; o **06**, **memória**; o **07**, **agente com ~treze *tools*** (rede necessária); o **08**, **cadeias LCEL compostas** (paralelo, ramos, *lambda*). Resumo por pasta: [`exercicios/README.md`](exercicios/README.md).
+Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecrã), usando **LangChain** / **LangGraph**. Os exercícios **00–03** e **05–10** (excepto o **04**) usam a API **Google Gemini**; o **04** usa **DeepSeek** (API compatível com OpenAI) e **PostgreSQL** com dados fictícios. O **05** introduz **LCEL**; o **06**, **memória**; o **07**, **agente com ~treze *tools*** (rede necessária); o **08**, **cadeias LCEL compostas**; o **09**, **RAG** sobre PDFs (**Chroma**) com **PostgreSQL** (processos fictícios e RAG híbrido); o **10**, **triagem de imagens** (DermaMNIST / MedMNIST) com **MongoDB** e agente ReAct. Resumo por pasta: [`exercicios/README.md`](exercicios/README.md).
 
 ## Início rápido
 
@@ -18,4 +18,4 @@ Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecr
 
 ## Baseline
 
-Este *baseline* consolida a estrutura `…_com_ecra` / `…_sem_ecra`, utilitários de Docker partilhados, exercício 4 com Postgres + DeepSeek e cadernos autocontidos.
+Este *baseline* consolida a estrutura `…_com_ecra` / `…_sem_ecra`, utilitários de Docker partilhados, exercício **04** com Postgres + DeepSeek, exercícios **09** (RAG + Chroma + Postgres para dados processuais fictícios) e **10** (MongoDB + classificador de imagens), cadernos autocontidos onde faz sentido, `.env.example` alinhado com Chroma/posthog/Gemini embeddings, e scripts `rebuild_all_docker` / `gerar_codigo_completo_txt`.

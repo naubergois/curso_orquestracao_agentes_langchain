@@ -19,6 +19,9 @@ build/
 # Jupyter
 .ipynb_checkpoints/
 
+# ChromaDB (índices locais do ex. 9 — regenerar com ingest_rag)
+**/chroma_juridico/
+
 # Ferramentas / OS
 .DS_Store
 .idea/

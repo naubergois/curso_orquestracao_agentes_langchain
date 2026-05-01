@@ -1,0 +1,1334 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 09_rag_juridico_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+psycopg2-binary>=2.9.0,<3
+langgraph>=0.2.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=4.0.0,<5
+langchain-community>=0.3.0
+langchain-chroma>=0.1.0,<0.3.0
+langchain-text-splitters>=0.3.0
+chromadb>=0.5.0,<1
+# posthog>=6 altera capture(); chromadb chama a API antiga (telemetria falha em stderr).
+posthog>=2.4.0,<6.0.0
+reportlab>=4.0.0,<5
+pypdf>=4.0.0,<6
+fastembed>=0.3.0,<1
+
+================================================================================
+# FICHEIRO: agent_gerador_pdfs.py
+================================================================================
+
+"""Agente ReAct (LangGraph) que gera texto pedagógico e grava PDFs jurídicos fictícios (ex. 9).
+
+Requer rede e `GOOGLE_API_KEY` / `GEMINI_API_KEY`. A tool `publicar_pdf_conceito` delega em
+`gerar_pdfs_conceitos.escrever_pdf_texto_plano` (HTML escapado).
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+_DIRETORIO_PDFS: Path | None = None
+
+
+def definir_diretorio_pdfs(p: Path) -> None:
+    global _DIRETORIO_PDFS
+    _DIRETORIO_PDFS = Path(p).resolve()
+
+
+@tool
+def publicar_pdf_conceito(slug: str, titulo: str, texto_plano: str) -> str:
+    """Grava `slug.pdf` na pasta configurada. Material **fictício** de estudo, PT-PT.
+
+    Args:
+        slug: nome do ficheiro sem extensão (ex.: negocio_juridico). Minúsculas, `_` permitido.
+        titulo: título (aparece em negrito).
+        texto_plano: 2–4 parágrafos separados por **uma linha em branco**; texto simples, sem HTML.
+    """
+    if _DIRETORIO_PDFS is None:
+        return "Erro interno: diretório PDF não configurado."
+    slug_clean = slug.strip().lower().replace(" ", "_")
+    safe = slug_clean.replace("_", "")
+    if not safe or not safe.isalnum():
+        return "Slug inválido."
+    from gerar_pdfs_conceitos import escrever_pdf_texto_plano
+
+    out = escrever_pdf_texto_plano(
+        _DIRETORIO_PDFS,
+        slug_clean,
+        titulo.strip(),
+        texto_plano.strip(),
+    )
+    return f"PDF gravado: {out.name}"
+
+
+def _load_env() -> None:
+    here = Path(__file__).resolve()
+    for d in (here.parent, *here.parents):
+        env = d / ".env"
+        if env.is_file():
+            load_dotenv(env, override=False)
+            return
+
+
+def _ensure_key() -> None:
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY para o agente gerador.")
+
+
+def build_graph():
+    """Grafo ReAct com memória em RAM (`thread_id` distingue corridas)."""
+    _load_env()
+    _ensure_key()
+    ex = Path(__file__).resolve().parent.parent
+    if str(ex) not in sys.path:
+        sys.path.insert(0, str(ex))
+    from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+
+    prim = (
+        os.environ.get("GEMINI_MODEL_EX09")
+        or os.environ.get("GEMINI_MODEL")
+        or "gemini-2.0-flash"
+    ).strip()
+    candidatos = gemini_model_candidates(primary=prim)
+    llm = make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.35)
+    return create_react_agent(
+        llm,
+        tools=[publicar_pdf_conceito],
+        checkpointer=MemorySaver(),
+    )
+
+
+_INSTRUCAO_LOTE = """Gera **5 PDFs pedagógicos** chamando `publicar_pdf_conceito` **5 vezes** (uma chamada por ficheiro).
+
+Usa **exactamente** estes slugs (1.º argumento):
+1) negocio_juridico — negócio jurídico (noção geral, requisitos típicos).
+2) contrato — contrato e liberdade contratual.
+3) responsabilidade_civil — responsabilidade civil introdutória.
+4) prescricao_caducidade — prescrição vs caducidade (visão geral).
+5) boa_fe — boa-fé nas relações jurídicas.
+
+Em cada chamada: `titulo` curto; `texto_plano` com 2–3 parágrafos separados por uma linha em branco; português europeu; não inventes artigos de lei nem acórdãos; indica tom de material de apoio a estudo.
+No fim, uma frase a confirmar que os cinco ficheiros foram gravados."""
+
+
+_ESPERADOS = frozenset(
+    {
+        "negocio_juridico.pdf",
+        "contrato.pdf",
+        "responsabilidade_civil.pdf",
+        "prescricao_caducidade.pdf",
+        "boa_fe.pdf",
+    }
+)
+
+
+def executar_geracao_pdfs_via_agente(
+    directorio: Path,
+    *,
+    thread_id: str = "ex09-agente-pdfs",
+) -> list[Path]:
+    """Invoca o agente até existirem os cinco PDFs esperados (ou falha com mensagem clara)."""
+    definir_diretorio_pdfs(directorio)
+    directorio.mkdir(parents=True, exist_ok=True)
+    graph = build_graph()
+    graph.invoke(
+        {"messages": [HumanMessage(content=_INSTRUCAO_LOTE)]},
+        config={"configurable": {"thread_id": thread_id}},
+    )
+    presentes = {p.name for p in directorio.glob("*.pdf")}
+    if not _ESPERADOS <= presentes:
+        faltam = sorted(_ESPERADOS - presentes)
+        raise RuntimeError(
+            f"O agente não gravou todos os PDFs. Em falta: {faltam}. "
+            "Corra de novo ou use `gerar_todos_pdfs` (conteúdo estático)."
+        )
+    return [(directorio / n).resolve() for n in sorted(_ESPERADOS)]
+
+================================================================================
+# FICHEIRO: db_processos.py
+================================================================================
+
+"""PostgreSQL — processos jurídicos (dados fictícios) para RAG híbrido com PDFs no Chroma.
+
+Variável `DATABASE_URL` (ou `EX09_DATABASE_URL`). Em Docker Compose do ex. 9 pré-defin-se
+`postgresql://curso:curso@db:5432/juridico`.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+_STOP_PT = frozenset(
+    "de da do dos das em um uma uns umas o a os as e ou que como qual quais "
+    "é são foi foram para com sem se há neste nesta pelo pela pelos pelas "
+    "ao aos à às doutro doutra um uma este esta estes estas".split()
+)
+
+
+def database_url() -> str:
+    u = (
+        os.environ.get("EX09_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip()
+    if u:
+        return u
+    port = (os.environ.get("EX09_POSTGRES_PORT") or "5434").strip() or "5434"
+    return f"postgresql://curso:curso@127.0.0.1:{port}/juridico"
+
+
+def conectar() -> psycopg2.extensions.connection:
+    return psycopg2.connect(database_url(), connect_timeout=10)
+
+
+def _palavras_chave(pergunta: str) -> list[str]:
+    raw = re.split(r"[^\wáàâãéèêíìîóòôõúùûç]+", pergunta.lower())
+    out: list[str] = []
+    for p in raw:
+        if len(p) < 3 or p in _STOP_PT:
+            continue
+        out.append(p)
+    return out[:12]
+
+
+def _executar_sql_script(conn: psycopg2.extensions.connection, path: Path) -> None:
+    texto = path.read_text(encoding="utf-8")
+    linhas = []
+    for line in texto.splitlines():
+        s = line.strip()
+        if s.startswith("--"):
+            continue
+        linhas.append(line)
+    partes = [p.strip() for p in "\n".join(linhas).split(";") if p.strip()]
+    with conn.cursor() as cur:
+        for stmt in partes:
+            cur.execute(stmt)
+
+
+def buscar_processos_para_contexto(pergunta: str, *, limite: int = 5) -> list[dict[str, Any]]:
+    """Devolve processos relevantes + nomes dos PDFs anexos (ligação ao RAG nos excertos)."""
+    terms = _palavras_chave(pergunta)
+    sql_base = """
+        SELECT
+            p.id,
+            p.numero,
+            p.tribunal,
+            p.tipo_acao,
+            p.estado,
+            p.data_distribuicao,
+            p.partes,
+            p.objeto,
+            p.sumario_factual,
+            p.valor_causa,
+            p.temas,
+            coalesce(string_agg(DISTINCT a.nome_ficheiro, ', ' ORDER BY a.nome_ficheiro), '') AS pdfs_anexo
+        FROM processos p
+        LEFT JOIN processo_anexos_pdf a ON a.processo_id = p.id
+    """
+    params: list[Any] = []
+    if terms:
+        conds: list[str] = []
+        for t in terms:
+            conds.append(
+                "("
+                "p.objeto ILIKE %s OR p.partes ILIKE %s OR p.temas ILIKE %s "
+                "OR p.tipo_acao ILIKE %s OR p.sumario_factual ILIKE %s OR p.numero ILIKE %s"
+                ")"
+            )
+            like = f"%{t}%"
+            params.extend([like] * 6)
+        sql = (
+            sql_base
+            + " WHERE "
+            + " OR ".join(conds)
+            + " GROUP BY p.id ORDER BY p.data_distribuicao DESC NULLS LAST LIMIT %s"
+        )
+        tu_lim = list(params) + [limite]
+    else:
+        sql = (
+            sql_base
+            + " GROUP BY p.id ORDER BY p.id ASC LIMIT %s"
+        )
+        tu_lim = [limite]
+
+    with conectar() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, tu_lim)
+            return list(cur.fetchall())
+
+
+def formatar_processos_para_prompt(linhas: list[dict[str, Any]]) -> str:
+    if not linhas:
+        return "(Nenhum processo coincidente na base PostgreSQL; use apenas os excertos PDF.)"
+    blocos: list[str] = []
+    for r in linhas:
+        pdf = (r.get("pdfs_anexo") or "").strip()
+        valor = r.get("valor_causa")
+        valor_s = f"{valor:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".") if valor is not None else "—"
+        data = r.get("data_distribuicao")
+        data_s = data.isoformat() if data else "—"
+        blocos.append(
+            "\n".join(
+                [
+                    f"• **Processo** `{r.get('numero', '?')}` | **Tribunal:** {r.get('tribunal', '?')}",
+                    f"  - **Tipo / estado:** {r.get('tipo_acao', '?')} | {r.get('estado', '?')}",
+                    f"  - **Distribuição:** {data_s} | **Valor da causa (ilustrativo):** {valor_s}",
+                    f"  - **Partes:** {r.get('partes', '')}",
+                    f"  - **Objeto:** {r.get('objeto', '')}",
+                    f"  - **Sumário factual:** {r.get('sumario_factual') or '—'}",
+                    f"  - **Temas (glossário):** {r.get('temas') or '—'}",
+                    f"  - **PDFs pedagógicos associados (metadado `source` no Chroma):** {pdf or '—'}",
+                ]
+            )
+        )
+    return "=== Dados estruturados (PostgreSQL) — processos fictícios para estudo ===\n" + "\n\n".join(
+        blocos
+    )
+
+
+def contexto_sql_para_rag(pergunta: str, *, limite: int = 5) -> str:
+    return formatar_processos_para_prompt(buscar_processos_para_contexto(pergunta, limite=limite))
+
+
+def garantir_esquema_e_seed_minimo() -> None:
+    """Cria tabelas e insere dados de demonstração se `processos` estiver vazio (ex.: Python local sem Docker)."""
+    root = Path(__file__).resolve().parent
+    schema = root / "init_db" / "01_schema.sql"
+    seed = root / "init_db" / "02_seed.sql"
+    if not schema.is_file():
+        return
+    conn = conectar()
+    try:
+        conn.autocommit = True
+        _executar_sql_script(conn, schema)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM processos")
+            n = cur.fetchone()[0]
+        if n == 0 and seed.is_file():
+            _executar_sql_script(conn, seed)
+    finally:
+        conn.close()
+
+================================================================================
+# FICHEIRO: gerar_pdfs_conceitos.py
+================================================================================
+
+"""Gera PDFs pedagógicos com conceitos jurídicos (PT-PT) para o exercício 9 (RAG).
+
+Material **fictício** para demonstração técnica; não é aconselhamento jurídico.
+Usa ReportLab; ficheiros gravados em `pdf_fontes/` (criar pasta antes, se necessário).
+"""
+
+from __future__ import annotations
+
+import html
+from pathlib import Path
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+AVISO = (
+    "<i>Documento gerado para fins pedagógicos do curso. Conteúdo simplificado e fictício; "
+    "não substitui consulta a profissional do Direito nem fontes oficiais.</i>"
+)
+
+
+def _conceitos() -> list[tuple[str, str]]:
+    """(nome_ficheiro_slug, corpo em HTML simples para Paragraph)."""
+    return [
+        (
+            "negocio_juridico",
+            """
+            <b>Negócio jurídico (noção geral)</b><br/><br/>
+            Designa-se por negócio jurídico a declaração ou conjunto de declarações de vontade
+            que visa produzir efeitos jurídicos. Em sistemas codificados, é comum distinguir-se
+            entre negócios bilaterais (contratos, em que há consentimento recíproco) e unilaterais
+            (como o testamento ou a renúncia, conforme o ordenamento).<br/><br/>
+            Requisitos típicos discutidos na dogmática: capacidade das partes, legitimidade
+            do objecto e da forma (quando prescrita), e existência de consentimento livre e informado.
+            """,
+        ),
+        (
+            "contrato",
+            """
+            <b>Contrato — celebração e liberdade contratual</b><br/><br/>
+            O contrato é frequentemente definido como acordo de duas ou mais vontades com o fim
+            de constituir obrigações. A liberdade contratual permite às partes fixar conteúdos
+            dentro dos limites legais e da ordem pública. Cláusulas gerais e condições contratuais
+            impostas unilateralmente suscitam questões de transparência e equilíbrio entre partes
+            desiguais.<br/><br/>
+            Mecanismos como a nulidade, a anulabilidade ou a revisão podem intervir quando
+            são violados requisitos essenciais ou valores protegidos.
+            """,
+        ),
+        (
+            "responsabilidade_civil",
+            """
+            <b>Responsabilidade civil (visão introdutória)</b><br/><br/>
+            A responsabilidade civil engloba, em muitos ordenamentos, obrigações de indemnizar
+            decorrentes de factos ilícitos (extracontractuais) ou do incumprimento contratual
+            (contractuais). A função reparatória visa, em regra, repor a vítima no estado em que
+            estaria sem o dano, dentro dos limites previstos na lei.<br/><br/>
+            Conceitos recorrentes: dano (patrimonial ou não patrimonial), nexo de causalidade,
+            culpa ou responsabilidade objectiva, consoante o regime aplicável.
+            """,
+        ),
+        (
+            "prescricao_caducidade",
+            """
+            <b>Prescrição e caducidade</b><br/><br/>
+            A prescrição extingue o direito de exigir o cumprimento de uma obrigação após um
+            período de inacção do titular, nos termos legais. A caducidade, onde exista,
+            opera extinção ou sanção pela simples fluência do prazo ou pelo incumprimento de
+            um acto processual ou jurídico, consoante o caso concreto.<br/><br/>
+            A distinção precisa depende sempre do código civil ou regime especial aplicável.
+            """,
+        ),
+        (
+            "boa_fe",
+            """
+            <b>Boa-fé nas relações jurídicas</b><br/><br/>
+            A boa-fé implica lealdade e cooperação entre sujeitos de direito: proibição de
+            comportamentos abusivos ou meramente oportunistas na negociação e execução de
+            negócios jurídicos. Serve frequentemente de interpretação supletiva e de limite
+            ao exercício de direitos subjetivos.<br/><br/>
+            A concretização varia entre sistemas de “boa-fé objectiva” nas relações obrigacionais
+            e âmbitos processuais específicos.
+            """,
+        ),
+    ]
+
+
+def _styles_pdf() -> tuple[ParagraphStyle, ParagraphStyle]:
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle(
+        "Corpo",
+        parent=styles["Normal"],
+        fontSize=11,
+        leading=14,
+        spaceAfter=8,
+    )
+    titulo_aviso = ParagraphStyle(
+        "Aviso",
+        parent=styles["Normal"],
+        fontSize=9,
+        textColor=colors.HexColor("#333333"),
+        spaceAfter=16,
+    )
+    return body, titulo_aviso
+
+
+def escrever_um_pdf(directorio: Path, slug: str, corpo_html: str) -> Path:
+    """Grava um PDF com o cabeçalho de aviso pedagógico e o corpo (HTML mínimo ReportLab)."""
+    directorio = Path(directorio)
+    directorio.mkdir(parents=True, exist_ok=True)
+    body, titulo_aviso = _styles_pdf()
+    path = directorio / f"{slug}.pdf"
+    doc = SimpleDocTemplate(
+        str(path),
+        pagesize=A4,
+        rightMargin=2 * cm,
+        leftMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+    )
+    story: list = [
+        Paragraph(AVISO, titulo_aviso),
+        Spacer(1, 0.3 * cm),
+        Paragraph(corpo_html.strip(), body),
+    ]
+    doc.build(story)
+    return path.resolve()
+
+
+def escrever_pdf_texto_plano(directorio: Path, slug: str, titulo: str, texto_plano: str) -> Path:
+    """Seguro para texto vindo do LLM: escapa HTML e trata parágrafos separados por linha em branco."""
+    partes = [p.strip() for p in texto_plano.split("\n\n") if p.strip()]
+    corpo_paras = "<br/><br/>".join(html.escape(p) for p in partes)
+    corpo = f"<b>{html.escape(titulo)}</b><br/><br/>{corpo_paras}"
+    return escrever_um_pdf(directorio, slug, corpo)
+
+
+def gerar_todos_pdfs(directorio: Path) -> list[Path]:
+    """Grava um PDF por conceito; devolve caminhos ordenados."""
+    directorio = Path(directorio)
+    paths: list[Path] = []
+    for slug, corpo in _conceitos():
+        paths.append(escrever_um_pdf(directorio, slug, corpo))
+    return paths
+
+
+if __name__ == "__main__":
+    here = Path(__file__).resolve().parent
+    out = here / "pdf_fontes"
+    for p in gerar_todos_pdfs(out):
+        print("Escrito:", p)
+
+================================================================================
+# FICHEIRO: ingest_rag.py
+================================================================================
+
+"""Ingestão em ChromaDB com **vários tipos de embeddings** (Gemini API + FastEmbed ONNX).
+
+Coleções por defeito:
+  - `juridico_fastembed_local` — `FastEmbedEmbeddings` (multilingual MiniLM ONNX, local; **sem** chave Google)
+  - `juridico_gemini_001` — `GoogleGenerativeAIEmbeddings` (`gemini-embedding-001`)
+  - `juridico_gemini_2` — `GoogleGenerativeAIEmbeddings` (`gemini-embedding-2-preview`; **espaço de embeddings distinto** do 001)
+
+Variáveis úteis: `FASTEMBED_MODEL`, `GEMINI_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL_ALT`,
+`GEMINI_EMBEDDING_2_OUTPUT_DIMENSIONALITY`, `GEMINI_EMBEDDING_2_BATCH_SIZE` (ver `.env.example`).
+
+Uso na pasta do exercício:
+  python ingest_rag.py
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Literal
+
+# Antes de importar chromadb/langchain_chroma (telemetria PostHog vs. chromadb).
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+os.environ.setdefault("CHROMADB_ANONYMIZED_TELEMETRY", "false")
+
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+
+if TYPE_CHECKING:
+    from chromadb.config import Settings
+from langchain_community.embeddings import FastEmbedEmbeddings
+from langchain_core.documents import Document
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pypdf import PdfReader
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for d in (here.parent, *here.parents):
+        env = d / ".env"
+        if env.is_file():
+            load_dotenv(env, override=False)
+            return
+
+
+def _chroma_client_settings() -> "Settings":
+    from chromadb.config import Settings
+
+    return Settings(anonymized_telemetry=False)
+
+
+class _GeminiAltEmbeddings:
+    """Modelo Gemini «alternativo» com lotes mais pequenos e textos nunca vazios.
+
+    Em alguns ambientes, ``gemini-embedding-2-*`` com lotes grandes devolve
+    respostas onde a lista de embeddings não corresponde aos textos, o que
+    provoca ``list index out of range`` ao indexar no Chroma.
+    """
+
+    def __init__(self, inner: GoogleGenerativeAIEmbeddings, *, batch_size: int) -> None:
+        self._inner = inner
+        self._batch_size = batch_size
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        safe = [t if (t or "").strip() else " " for t in texts]
+        return self._inner.embed_documents(safe, batch_size=self._batch_size)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        safe = [t if (t or "").strip() else " " for t in texts]
+        return await self._inner.aembed_documents(safe, batch_size=self._batch_size)
+
+    def embed_query(self, text: str) -> list[float]:
+        t = text if (text or "").strip() else " "
+        return self._inner.embed_query(t)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        t = text if (text or "").strip() else " "
+        return await self._inner.aembed_query(t)
+
+
+def _gemini2_optional_output_dim(model: str) -> int | None:
+    if "gemini-embedding-2" not in model:
+        return None
+    raw = (os.environ.get("GEMINI_EMBEDDING_2_OUTPUT_DIMENSIONALITY") or "768").strip()
+    if not raw or raw.lower() in ("none", "default", "0"):
+        return None
+    return int(raw)
+
+
+def _gemini2_batch_size() -> int:
+    raw = (os.environ.get("GEMINI_EMBEDDING_2_BATCH_SIZE") or "16").strip()
+    try:
+        b = int(raw)
+    except ValueError:
+        b = 16
+    return max(1, min(b, 100))
+
+
+def _garantir_chave() -> None:
+    k = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not k:
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY para embeddings Gemini.")
+    os.environ.setdefault("GOOGLE_API_KEY", k)
+
+
+def _norm_gemini_model(name: str) -> str:
+    n = (name or "").strip()
+    if n.startswith("models/"):
+        n = n[len("models/") :]
+    return n
+
+
+def _gemini_embedding_primary() -> str:
+    raw = (
+        os.environ.get("GEMINI_EMBEDDING_MODEL")
+        or os.environ.get("GEMINI_EMBEDDING_MODEL_004")
+        or "gemini-embedding-001"
+    ).strip()
+    raw = _norm_gemini_model(raw)
+    # Nomes antigos da API (404 em v1beta com embedContent actual)
+    if raw in ("text-embedding-004", "embedding-001", "text-embedding-004-embedding-preview"):
+        return "gemini-embedding-001"
+    return raw
+
+
+def _gemini_embedding_alt() -> str:
+    raw = (
+        os.environ.get("GEMINI_EMBEDDING_MODEL_ALT")
+        or os.environ.get("GEMINI_EMBEDDING_MODEL_LEGACY")
+        or "gemini-embedding-2-preview"
+    ).strip()
+    raw = _norm_gemini_model(raw)
+    if raw in ("embedding-001", "text-embedding-004"):
+        return "gemini-embedding-2-preview"
+    return raw
+
+
+def carregar_pdfs_como_documentos(pdf_paths: list[Path]) -> list[Document]:
+    docs: list[Document] = []
+    for p in pdf_paths:
+        reader = PdfReader(str(p))
+        parts: list[str] = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                parts.append(t)
+        body = "\n\n".join(parts).strip()
+        if body:
+            docs.append(
+                Document(
+                    page_content=body,
+                    metadata={"source": p.name, "path": str(p)},
+                )
+            )
+    return docs
+
+
+def dividir_documentos(
+    docs: list[Document],
+    *,
+    chunk_size: int = 900,
+    chunk_overlap: int = 120,
+) -> list[Document]:
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        add_start_index=True,
+    )
+    return splitter.split_documents(docs)
+
+
+def _build_embeddings_gemini_primary() -> GoogleGenerativeAIEmbeddings:
+    _garantir_chave()
+    return GoogleGenerativeAIEmbeddings(model=_gemini_embedding_primary())
+
+
+def _build_embeddings_gemini_alt() -> GoogleGenerativeAIEmbeddings | _GeminiAltEmbeddings:
+    _garantir_chave()
+    model = _gemini_embedding_alt()
+    dim = _gemini2_optional_output_dim(model)
+    kwargs: dict = {"model": model}
+    if dim is not None:
+        kwargs["output_dimensionality"] = dim
+    inner = GoogleGenerativeAIEmbeddings(**kwargs)
+    return _GeminiAltEmbeddings(inner, batch_size=_gemini2_batch_size())
+
+
+def _build_embeddings_fastembed() -> FastEmbedEmbeddings:
+    name = (
+        os.environ.get("FASTEMBED_MODEL")
+        or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    ).strip()
+    cache = os.environ.get("FASTEMBED_CACHE_DIR")
+    kwargs: dict = {"model_name": name}
+    if cache:
+        kwargs["cache_dir"] = cache
+    return FastEmbedEmbeddings(**kwargs)
+
+
+def listar_factories_embeddings() -> dict[str, Callable[[], Any]]:
+    """Embeddings disponíveis para indexar (cada um → uma coleção Chroma)."""
+
+    def fastembed_local() -> FastEmbedEmbeddings:
+        return _build_embeddings_fastembed()
+
+    def gemini_001() -> GoogleGenerativeAIEmbeddings:
+        return _build_embeddings_gemini_primary()
+
+    def gemini_2() -> GoogleGenerativeAIEmbeddings | _GeminiAltEmbeddings:
+        return _build_embeddings_gemini_alt()
+
+    return {
+        "juridico_fastembed_local": fastembed_local,
+        "juridico_gemini_001": gemini_001,
+        "juridico_gemini_2": gemini_2,
+    }
+
+
+def indexar_embeddings(
+    chunks: list[Document],
+    persist_directory: Path,
+    *,
+    limpar: bool = False,
+) -> list[str]:
+    """Cria ou substitui uma coleção por tipo de embedding. Devolve nomes das coleções escritas."""
+    persist_directory = Path(persist_directory)
+    persist_directory.mkdir(parents=True, exist_ok=True)
+
+    factories = listar_factories_embeddings()
+    if limpar and persist_directory.exists():
+        import shutil
+
+        shutil.rmtree(persist_directory)
+        persist_directory.mkdir(parents=True, exist_ok=True)
+
+    criadas: list[str] = []
+    for collection_name, factory in factories.items():
+        try:
+            emb = factory()
+            Chroma.from_documents(
+                documents=chunks,
+                embedding=emb,
+                persist_directory=str(persist_directory),
+                collection_name=collection_name,
+                client_settings=_chroma_client_settings(),
+            )
+            criadas.append(collection_name)
+            print(
+                f"[ingest] Coleção `{collection_name}` com {len(chunks)} chunks.",
+                flush=True,
+            )
+        except Exception as e:
+            print(
+                f"[ingest] Aviso: não foi possível indexar `{collection_name}` — {e!s}",
+                flush=True,
+            )
+    return criadas
+
+
+def carregar_vectorstore(
+    collection_name: str,
+    persist_directory: Path,
+) -> Chroma:
+    """Abre uma coleção existente (usa o mesmo tipo de embedding da ingestão)."""
+    factories = listar_factories_embeddings()
+    if collection_name not in factories:
+        raise ValueError(
+            f"Coleção desconhecida: {collection_name}. Opções: {list(factories)}"
+        )
+    emb = factories[collection_name]()
+    persist_directory = Path(persist_directory)
+    try:
+        vs = Chroma(
+            collection_name=collection_name,
+            embedding_function=emb,
+            persist_directory=str(persist_directory),
+            client_settings=_chroma_client_settings(),
+        )
+        # Força leitura do sysdb; pastas antigas / corruptas falham aqui com nitidez.
+        vs.similarity_search("__chroma_sanity__", k=1)
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(
+            f"Chroma em `{persist_directory}` parece vazio, corrupto, só leitura ou incompatível com esta versão "
+            "do chromadb (por exemplo esquema SQLite antigo). Corrija permissões, apague essa pasta ou execute a "
+            "ingestão com `limpar_chroma=True` e volte a indexar."
+        ) from e
+    return vs
+
+
+def pipeline_completo(
+    diretorio_pdfs: Path | None = None,
+    persist_directory: Path | None = None,
+    *,
+    limpar_chroma: bool = False,
+    fonte_pdfs: Literal["estatico", "agente"] = "estatico",
+) -> tuple[list[Path], list[str]]:
+    _load_local_env()
+    here = Path(__file__).resolve().parent
+    diretorio_pdfs = diretorio_pdfs or (here / "pdf_fontes")
+    persist_directory = persist_directory or (here / "chroma_juridico")
+
+    if fonte_pdfs == "agente":
+        from agent_gerador_pdfs import executar_geracao_pdfs_via_agente
+
+        pdfs = executar_geracao_pdfs_via_agente(diretorio_pdfs)
+    else:
+        from gerar_pdfs_conceitos import gerar_todos_pdfs
+
+        pdfs = gerar_todos_pdfs(diretorio_pdfs)
+
+    docs = carregar_pdfs_como_documentos(pdfs)
+    if not docs:
+        raise RuntimeError("Nenhum texto extraído dos PDFs.")
+    chunks = dividir_documentos(docs)
+    chunks = [c for c in chunks if (c.page_content or "").strip()]
+    if not chunks:
+        raise RuntimeError("Sem chunks de texto não vazios para indexar.")
+    nomes = indexar_embeddings(
+        chunks, persist_directory, limpar=limpar_chroma
+    )
+    return pdfs, nomes
+
+
+if __name__ == "__main__":
+    _load_local_env()
+    pipeline_completo(limpar_chroma=True)
+
+================================================================================
+# FICHEIRO: rag_juridico.py
+================================================================================
+
+"""Cadeia RAG (LCEL) sobre Chroma — exercício 9."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+
+
+def formatar_documentos(docs: list[Document]) -> str:
+    blocos: list[str] = []
+    for d in docs:
+        meta = d.metadata.get("source", "?")
+        blocos.append(f"[Fonte: {meta}]\n{d.page_content}")
+    return "\n\n---\n\n".join(blocos)
+
+
+def construir_cadeia_rag(llm: Any, retriever) -> Any:
+    """Retriever com `invoke(str)` que devolve lista de `Document`."""
+
+    def _contexto(pergunta: str) -> str:
+        docs = retriever.invoke(pergunta)
+        return formatar_documentos(docs)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "És um assistente de **estudo** em português europeu. Responde só com base no "
+                "contexto fornecido. Se o contexto não bastar, diz explicitamente que não há "
+                "informação suficiente nos excertos. Não inventes artigos de lei nem jurisprudência.",
+            ),
+            (
+                "human",
+                "Contexto (excertos de PDFs pedagógicos):\n{contexto}\n\nPergunta: {pergunta}",
+            ),
+        ]
+    )
+
+    return (
+        RunnablePassthrough.assign(contexto=RunnableLambda(lambda x: _contexto(x["pergunta"])))
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+
+def construir_cadeia_rag_hibrido(
+    llm: Any,
+    retriever,
+    *,
+    limite_sql: int = 5,
+) -> Any:
+    """RAG que junta **processos** em PostgreSQL (estruturado) com **excertos PDF** no Chroma (não estruturado)."""
+
+    def _pdf(pergunta: str) -> str:
+        docs = retriever.invoke(pergunta)
+        return formatar_documentos(docs)
+
+    def _sql(pergunta: str) -> str:
+        from db_processos import contexto_sql_para_rag
+
+        return contexto_sql_para_rag(pergunta, limite=limite_sql)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "És um assistente de **estudo** em português europeu. Tens duas fontes independentes: "
+                "**(A) quadro processual fictício** em base relacional (PostgreSQL) e **(B) excertos de PDFs "
+                "pedagógicos** recuperados por similaridade (Chroma). Relaciona-as quando fizer sentido — por "
+                "exemplo, os PDFs associados a cada processo indicam o tema dos anexos didáticos que podem "
+                "apoiar a resposta. Se uma das fontes não for relevante, indica-o sem inventar factos. "
+                "Não inventes números de processo nem jurisprudência real.",
+            ),
+            (
+                "human",
+                "**(A) Dados estruturados — processos (PostgreSQL)**\n{dados_processos}\n\n"
+                "**(B) Texto não estruturado — excertos de PDFs (RAG vetorial)**\n{contexto_pdf}\n\n"
+                "**Pergunta:** {pergunta}",
+            ),
+        ]
+    )
+
+    return (
+        RunnablePassthrough.assign(
+            contexto_pdf=RunnableLambda(lambda x: _pdf(x["pergunta"])),
+            dados_processos=RunnableLambda(lambda x: _sql(x["pergunta"])),
+        )
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+
+================================================================================
+# FICHEIRO: exercicio_9_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 9 — **RAG** jurídico (PDFs, Chroma, PostgreSQL)
+# 
+# Gera-se **vários PDFs** (texto fixo em código **ou** via **agente ReAct** + tool `publicar_pdf_conceito`), divide-se o texto em *chunks*, indexa-se no **ChromaDB** com três embeddings (**FastEmbed** MiniLM multilingual ONNX, **gemini-embedding-001**, **gemini-embedding-2-preview**) e compõe-se uma **cadeia RAG** (LCEL).
+# 
+# **RAG híbrido:** dados **estruturados** (processos fictícios em **PostgreSQL**, tabela `processos` + vínculos `processo_anexos_pdf` aos nomes dos PDFs) são **fundidos no prompt** com o **texto não estruturado** recuperado do Chroma. O `docker-compose.jupyter.yml` inclui o serviço `db` e define `DATABASE_URL`.
+# 
+# **Variáveis:** `GOOGLE_API_KEY`; opcional `GEMINI_MODEL_EX09`, `GEMINI_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL_ALT`, `FASTEMBED_MODEL`, `DATABASE_URL` / `EX09_POSTGRES_PORT` (fora do Docker). Sem chave Google, tende a funcionar **só** a coleção FastEmbed local; chat e agente PDF precisam da chave.
+# 
+# **Arranque Docker:** `./run_jupyter.sh` nesta pasta (Postgres na porta **5434** por defeito no host).
+
+# --- Célula 1 (código) ---
+from __future__ import annotations
+
+import os
+
+# Antes de carregar módulos que importam Chroma (evita erros de telemetria PostHog/chromadb).
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+os.environ.setdefault("CHROMADB_ANONYMIZED_TELEMETRY", "false")
+
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+for p in (Path.cwd(), *Path.cwd().parents):
+    env = p / ".env"
+    if env.is_file():
+        load_dotenv(env)
+        break
+
+_ex = Path.cwd().resolve().parent
+if str(_ex) not in sys.path:
+    sys.path.insert(0, str(_ex))
+from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+
+_prim = (
+    os.environ.get("GEMINI_MODEL_EX09")
+    or os.environ.get("GEMINI_MODEL")
+    or "gemini-2.0-flash"
+).strip()
+candidatos = gemini_model_candidates(primary=_prim)
+llm = make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.2)
+print("Modelos de chat (ordem):", " → ".join(candidatos))
+
+# --- Célula 2 (markdown) ---
+# ## 1. Gerar PDFs e indexar no Chroma (três coleções)
+# 
+# Passos **visíveis** na célula seguinte:
+# 
+# 1. **Gerar** ficheiros PDF em `pdf_fontes/` (`gerar_todos_pdfs`).
+# 2. **Extrair** texto com **pypdf** → `Document` LangChain (`page_content` + `metadata["source"]`).
+# 3. **Dividir** em *chunks* com `RecursiveCharacterTextSplitter`.
+# 4. **Vectorizar** e gravar no Chroma — a **lista de coleções / modelos de embedding** está centralizada em `ingest_rag.indexar_embeddings` (evita repetir ~80 linhas de configuração por modelo).
+# 
+# Opcionalmente, `fonte_pdfs="agente"` em `pipeline_completo` (outro módulo) substitui o passo 1 por geração via agente; aqui usamos só o fluxo estático para clareza.
+
+# --- Célula 3 (código) ---
+import shutil
+from pathlib import Path
+
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pypdf import PdfReader
+
+from gerar_pdfs_conceitos import gerar_todos_pdfs
+from ingest_rag import indexar_embeddings
+
+here = Path.cwd()
+dir_pdfs = here / "pdf_fontes"
+persist = here / "chroma_juridico"
+
+# --- 1) PDFs no disco (ReportLab; lógica em `gerar_pdfs_conceitos.py`) ---
+pdfs = gerar_todos_pdfs(dir_pdfs)
+
+# --- 2) Texto bruto → `Document` (uma entrada por PDF) ---
+documentos: list[Document] = []
+for ficheiro in pdfs:
+    leitor = PdfReader(str(ficheiro))
+    partes: list[str] = []
+    for pagina in leitor.pages:
+        texto_pagina = pagina.extract_text()
+        if texto_pagina:
+            partes.append(texto_pagina)
+    corpo = "\n\n".join(partes).strip()
+    if corpo:
+        documentos.append(
+            Document(
+                page_content=corpo,
+                metadata={"source": ficheiro.name, "path": str(ficheiro)},
+            )
+        )
+
+# --- 3) Chunking: cortes com sobreposição para não perder contexto nas junções ---
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=900,
+    chunk_overlap=120,
+    add_start_index=True,
+)
+chunks = splitter.split_documents(documentos)
+chunks = [c for c in chunks if (c.page_content or "").strip()]
+
+# --- 4) Chroma: apagar índice anterior e voltar a indexar (3 embeddings distintos) ---
+# `indexar_embeddings` itera as fábricas definidas em `ingest_rag` e chama `Chroma.from_documents` por coleção.
+if persist.exists():
+    shutil.rmtree(persist)
+persist.mkdir(parents=True, exist_ok=True)
+colecoes_escritas = indexar_embeddings(chunks, persist, limpar=False)
+
+print("PDFs:", [p.name for p in pdfs])
+print("Chunks:", len(chunks))
+print("Coleções (criadas ou com aviso no log):", colecoes_escritas)
+
+# --- Célula 4 (markdown) ---
+# ## 2. Comparar *retrieval* entre coleções
+# 
+# Para **abrir** cada coleção é preciso usar o **mesmo** modelo de embedding que na ingestão (senão as dimensões não batem). Por isso reutilizamos só a função utilitária `carregar_vectorstore` de `ingest_rag.py`. O que interessa ver aqui é o fluxo: **pergunta → embedding da query → `similarity_search` → top‑k `Document`**.
+
+# --- Célula 5 (código) ---
+from ingest_rag import carregar_vectorstore
+
+persist = Path.cwd() / "chroma_juridico"
+pergunta = "Responsabilidade civil e culpa — resumo."
+
+# Cada nome corresponde a uma coleção Chroma com um embedding diferente (ver `ingest_rag.listar_factories_embeddings`).
+nomes_colecoes = (
+    "juridico_fastembed_local",
+    "juridico_gemini_001",
+    "juridico_gemini_2",
+)
+
+for nome in nomes_colecoes:
+    try:
+        vs = carregar_vectorstore(nome, persist)
+        # Em baixo nível: embed da pergunta + distância no índice HNSW do Chroma.
+        docs = vs.similarity_search(pergunta, k=2)
+        print(f"\n=== {nome} ===")
+        for i, doc in enumerate(docs, 1):
+            excerto = doc.page_content[:200].replace("\n", " ")
+            print(i, doc.metadata.get("source"), excerto, "…")
+    except Exception as e:
+        print(f"\n=== {nome} (erro ao abrir ou consultar) === {e}")
+
+# --- Célula 6 (markdown) ---
+# ## 3. Cadeia RAG (LCEL) — montada **na célula seguinte**
+# 
+# Ideia:
+# 
+# 1. `RunnablePassthrough.assign` duplica o dicionário de entrada e acrescenta a chave `contexto`.
+# 2. `RunnableLambda` chama o **retriever** (`invoke(pergunta)` → lista de `Document`).
+# 3. Formatamos os documentos para **uma única string** e injetamos no `ChatPromptTemplate`.
+# 4. `| llm | StrOutputParser()` — resposta final em texto.
+# 
+# Assim vês o **encadeamento** sem `import construir_cadeia_rag`.
+
+# --- Célula 7 (código) ---
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+
+from ingest_rag import carregar_vectorstore
+
+coleccao = "juridico_fastembed_local"
+vs = carregar_vectorstore(coleccao, persist)
+retriever = vs.as_retriever(search_kwargs={"k": 4})
+
+
+def formatar_documentos_para_prompt(documentos_recuperados):
+    """Junta excertos com indicação da fonte (nome do PDF)."""
+    blocos = []
+    for doc in documentos_recuperados:
+        fonte = doc.metadata.get("source", "?")
+        blocos.append(f"[Fonte: {fonte}]\n{doc.page_content}")
+    return "\n\n---\n\n".join(blocos)
+
+
+def texto_contexto_pdf(pergunta: str) -> str:
+    recuperados = retriever.invoke(pergunta)
+    return formatar_documentos_para_prompt(recuperados)
+
+
+prompt_rag = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És um assistente de **estudo** em português europeu. Responde só com base no "
+            "contexto fornecido. Se o contexto não bastar, diz que não há informação suficiente nos excertos. "
+            "Não inventes artigos de lei nem jurisprudência.",
+        ),
+        (
+            "human",
+            "Contexto (excertos de PDFs pedagógicos):\n{contexto}\n\nPergunta: {pergunta}",
+        ),
+    ]
+)
+
+# LCEL: dict com "pergunta" → acrescenta "contexto" → prompt → modelo → texto
+chain_rag = (
+    RunnablePassthrough.assign(
+        contexto=RunnableLambda(lambda entrada: texto_contexto_pdf(entrada["pergunta"]))
+    )
+    | prompt_rag
+    | llm
+    | StrOutputParser()
+)
+
+saida = chain_rag.invoke(
+    {"pergunta": "Em duas frases: o que distingue prescrição e caducidade?"}
+)
+print(saida)
+
+# --- Célula 8 (markdown) ---
+# ## 4. RAG híbrido — PostgreSQL (processos) + Chroma (PDFs)
+# 
+# Na **célula seguinte** o fluxo está explícito: URL da base → extração de *tokens* da pergunta → `SELECT ... ILIKE` → junção com `processo_anexos_pdf` → texto para o prompt.
+# 
+# Depois, a cadeia LCEL junta esse bloco **(A)** com os excertos **(B)** do retriever Chroma (sem `import construir_cadeia_rag_hibrido`).
+# 
+# Requer Postgres (`DATABASE_URL` no Docker Compose do ex. 9).
+
+# --- Célula 9 (código) ---
+import os
+import re
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# Palavras vazias mínimas (evitar AND gigante só com artigos)
+_STOP = frozenset(
+    "de da do dos das em um uma o a os as e ou que como para com se há foi são".split()
+)
+
+
+def url_postgresql() -> str:
+    u = (os.environ.get("EX09_DATABASE_URL") or os.environ.get("DATABASE_URL") or "").strip()
+    if u:
+        return u
+    porta = (os.environ.get("EX09_POSTGRES_PORT") or "5434").strip() or "5434"
+    return f"postgresql://curso:curso@127.0.0.1:{porta}/juridico"
+
+
+def tokens_pergunta(pergunta: str) -> list[str]:
+    partes = re.split(r"[^\wáàâãéèêíìîóòôõúùûç]+", pergunta.lower())
+    return [p for p in partes if len(p) >= 3 and p not in _STOP][:12]
+
+
+def buscar_processos_e_anexos(pergunta: str, limite: int = 5) -> list[dict]:
+    termos = tokens_pergunta(pergunta)
+    sql_base = """
+        SELECT
+            p.id,
+            p.numero,
+            p.tribunal,
+            p.tipo_acao,
+            p.estado,
+            p.data_distribuicao,
+            p.partes,
+            p.objeto,
+            p.sumario_factual,
+            p.valor_causa,
+            p.temas,
+            coalesce(string_agg(DISTINCT a.nome_ficheiro, ', ' ORDER BY a.nome_ficheiro), '') AS pdfs_anexo
+        FROM processos p
+        LEFT JOIN processo_anexos_pdf a ON a.processo_id = p.id
+    """
+    params: list = []
+    if termos:
+        condicoes = []
+        for t in termos:
+            pedaco = (
+                "("
+                "p.objeto ILIKE %s OR p.partes ILIKE %s OR p.temas ILIKE %s OR "
+                "p.tipo_acao ILIKE %s OR p.sumario_factual ILIKE %s OR p.numero ILIKE %s)"
+            )
+            condicoes.append(pedaco)
+            like = f"%{t}%"
+            params.extend([like] * 6)
+        sql = sql_base + " WHERE " + " OR ".join(condicoes)
+        sql += " GROUP BY p.id ORDER BY p.data_distribuicao DESC NULLS LAST LIMIT %s"
+        params.append(limite)
+    else:
+        sql = sql_base + " GROUP BY p.id ORDER BY p.id ASC LIMIT %s"
+        params = [limite]
+
+    with psycopg2.connect(url_postgresql(), connect_timeout=10) as ligacao:
+        with ligacao.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return list(cur.fetchall())
+
+
+def formatar_processos_para_prompt(linhas: list[dict]) -> str:
+    if not linhas:
+        return "(Sem linhas na tabela `processos` — verifique o seed e `DATABASE_URL`. )"
+    blocos = []
+    for r in linhas:
+        pdfs = (r.get("pdfs_anexo") or "").strip()
+        valor = r.get("valor_causa")
+        if valor is not None:
+            valor_txt = f"{float(valor):,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
+        else:
+            valor_txt = "—"
+        data = r.get("data_distribuicao")
+        data_txt = data.isoformat() if data else "—"
+        blocos.append(
+            "\n".join(
+                [
+                    f"• **Processo** `{r.get('numero', '?')}` | **Tribunal:** {r.get('tribunal', '?')}",
+                    f"  - **Tipo / estado:** {r.get('tipo_acao', '?')} | {r.get('estado', '?')}",
+                    f"  - **Distribuição:** {data_txt} | **Valor da causa (ilustrativo):** {valor_txt}",
+                    f"  - **Partes:** {r.get('partes', '')}",
+                    f"  - **Objeto:** {r.get('objeto', '')}",
+                    f"  - **Sumário factual:** {r.get('sumario_factual') or '—'}",
+                    f"  - **Temas:** {r.get('temas') or '—'}",
+                    f"  - **PDFs associados** (= `source` no Chroma): {pdfs or '—'}",
+                ]
+            )
+        )
+    cabecalho = "=== Dados estruturados (PostgreSQL) — processos fictícios ===\n"
+    return cabecalho + "\n\n".join(blocos)
+
+
+def contexto_processos_para_rag(pergunta: str, limite: int = 5) -> str:
+    """Texto pronto a injectar no prompt do LLM."""
+    return formatar_processos_para_prompt(buscar_processos_e_anexos(pergunta, limite=limite))
+
+
+# --- demonstração ---
+demo_pergunta = "Qual o processo sobre prescrição caducidade e quais os PDFs associados?"
+print(contexto_processos_para_rag(demo_pergunta, limite=4))
+
+# --- Célula 10 (código) ---
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
+
+from ingest_rag import carregar_vectorstore
+
+# Executar antes a célula que define `contexto_processos_para_rag` e `carregar_vectorstore` / `persist`.
+coleccao_h = "juridico_fastembed_local"
+vs_h = carregar_vectorstore(coleccao_h, persist)
+retriever_h = vs_h.as_retriever(search_kwargs={"k": 4})
+
+
+def formatar_docs(documentos):
+    partes = []
+    for doc in documentos:
+        fonte = doc.metadata.get("source", "?")
+        partes.append(f"[Fonte: {fonte}]\n{doc.page_content}")
+    return "\n\n---\n\n".join(partes)
+
+
+def texto_chroma(pergunta: str) -> str:
+    return formatar_docs(retriever_h.invoke(pergunta))
+
+
+prompt_hibrido = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És um assistente de **estudo** em português europeu. Integras (A) dados de processos fictícios em SQL "
+            "e (B) excertos de PDFs do Chroma. Relaciona os PDFs indicados em (A) com o teor de (B) quando fizer sentido. "
+            "Se uma fonte não for útil, diz‑o. Não inventes jurisprudência real.",
+        ),
+        (
+            "human",
+            "**(A) Dados estruturados (PostgreSQL)**\n{dados_processos}\n\n"
+            "**(B) Excertos de PDFs (Chroma)**\n{contexto_pdf}\n\n"
+            "**Pergunta:** {pergunta}",
+        ),
+    ]
+)
+
+chain_hibrido = (
+    RunnablePassthrough.assign(
+        contexto_pdf=RunnableLambda(lambda d: texto_chroma(d["pergunta"])),
+        dados_processos=RunnableLambda(
+            lambda d: contexto_processos_para_rag(d["pergunta"], limite=4)
+        ),
+    )
+    | prompt_hibrido
+    | llm
+    | StrOutputParser()
+)
+
+print(
+    chain_hibrido.invoke(
+        {
+            "pergunta": (
+                "Em 3 frases: resume o processo sobre prescrição/caducidade, "
+                "indica o PDF pedagógico ligado e cruza com o que os excertos dizem sobre a distinção."
+            )
+        }
+    )
+)
+
+# --- Célula 11 (código) ---
+# --- Célula 12 (código) ---

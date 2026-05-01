@@ -1,0 +1,570 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 10_triagem_imagens_patologia_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langgraph>=0.2.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=4.0.0,<5
+pymongo>=4.6.0,<5
+numpy>=1.26.0,<3
+scikit-learn>=1.3.0,<2
+joblib>=1.3.0,<2
+medmnist>=3.0.0,<4
+torch>=2.2.0,<2.10
+torchvision>=0.17.0,<1
+Pillow>=10.0.0,<12
+
+================================================================================
+# FICHEIRO: agent_triagem.py
+================================================================================
+
+"""Agente ReAct (LangGraph) para **triagem**: classifica lesões DermaMNIST, grava no MongoDB e consulta prioridades.
+
+Ferramentas expostas ao LLM para orquestrar o fluxo sem código manual repetitivo.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+from classificador import prever_de_vector, vetor_de_amostra_medmnist
+from mongo_store import (
+    contar_pendentes,
+    inserir_caso,
+    listar_top_prioridade,
+    marcar_atendido,
+    obter_caso,
+)
+from triagem import CLASSES_DERMA_MNIST, calcular_prioridade, nome_patologia_prioritaria
+
+
+def _load_env() -> None:
+    here = Path(__file__).resolve()
+    for d in (here.parent, *here.parents):
+        env = d / ".env"
+        if env.is_file():
+            load_dotenv(env, override=False)
+            return
+
+
+def _ensure_key() -> None:
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY.")
+
+
+@tool
+def processar_amostra_derma(split: str, indice: int) -> str:
+    """Extrai uma imagem DermaMNIST (28×28), classifica e regista o caso no MongoDB com prioridade.
+
+    Args:
+        split: `train`, `val` ou `test`.
+        indice: posição no subconjunto MedMNIST.
+    """
+    split = split.strip().lower()
+    if split not in ("train", "val", "test"):
+        return "Erro: `split` deve ser train, val ou test."
+    try:
+        x, y_verd = vetor_de_amostra_medmnist(split, int(indice))
+    except Exception as e:
+        return f"Erro ao ler amostra: {e}"
+    res = prever_de_vector(x)
+    prio = calcular_prioridade(res["probabilidades"], res["classe_predita"])
+    cid = f"dmnist_{split}_{int(indice)}"
+    inserir_caso(
+        caso_id=cid,
+        origem="dermamnist",
+        indice_amostra=int(indice),
+        split=split,
+        rotulo_verdadeiro=int(y_verd),
+        resultado_classificador=res,
+        prioridade=prio,
+    )
+    rotulo_v = CLASSES_DERMA_MNIST[y_verd] if 0 <= y_verd < len(CLASSES_DERMA_MNIST) else str(y_verd)
+    return (
+        f"Caso `{cid}` gravado. Predito: {res['rotulo_predito']} (conf. max {res['confianca_maxima']:.3f}). "
+        f"Rótulo dataset: {rotulo_v}. Prioridade {prio}/100."
+    )
+
+
+@tool
+def consultar_fila_prioridade(limite: int = 8) -> str:
+    """Lista os casos pendentes com maior prioridade (limite predefinido 8)."""
+    rows = listar_top_prioridade(max(1, min(25, int(limite))))
+    if not rows:
+        return "Não há casos pendentes na fila."
+    linhas = []
+    for i, r in enumerate(rows, 1):
+        linhas.append(
+            f"{i}. {r.get('caso_id')} — prioridade {r.get('prioridade')} — "
+            f"pred: {r.get('rotulo_predito')} — conf {r.get('confianca_maxima', 0):.3f}"
+        )
+    return "\n".join(linhas)
+
+
+@tool
+def detalhe_caso(caso_id: str) -> str:
+    """Devolve campos principais de um caso (MongoDB) pelo `caso_id`."""
+    doc = obter_caso(caso_id.strip())
+    if not doc:
+        return f"Caso `{caso_id}` não encontrado."
+    prob = list(doc.get("probabilidades") or [])
+    slim = {k: v for k, v in doc.items() if k not in ("_id", "probabilidades")}
+    return f"{slim}\nprobabilidades (primeiros 3): {prob[:3]}"
+
+
+@tool
+def finalizar_atendimento(caso_id: str) -> str:
+    """Marca o caso como atendido na base de dados."""
+    ok = marcar_atendido(caso_id.strip())
+    return "Estado atualizado para atendido." if ok else f"Nenhuma alteração para `{caso_id}`."
+
+
+@tool
+def contagem_fila_pendente() -> str:
+    """Número de casos ainda pendentes de atendimento."""
+    n = contar_pendentes()
+    alvo = nome_patologia_prioritaria()
+    return f"Pendentes: {n}. Patologia com peso extra na prioridade: {alvo}."
+
+
+def build_graph():
+    _load_env()
+    _ensure_key()
+    ex = Path(__file__).resolve().parent.parent
+    if str(ex) not in sys.path:
+        sys.path.insert(0, str(ex))
+    from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+
+    prim = (
+        os.environ.get("GEMINI_MODEL_EX10")
+        or os.environ.get("GEMINI_MODEL")
+        or "gemini-2.0-flash"
+    ).strip()
+    candidatos = gemini_model_candidates(primary=prim)
+    llm = make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.15)
+    return create_react_agent(
+        llm,
+        tools=[
+            processar_amostra_derma,
+            consultar_fila_prioridade,
+            detalhe_caso,
+            finalizar_atendimento,
+            contagem_fila_pendente,
+        ],
+        checkpointer=MemorySaver(),
+    )
+
+
+def convidar_triagem(
+    mensagem_utilizador: str,
+    *,
+    thread_id: str = "ex10-triagem",
+) -> str:
+    """Uma volta de conversa com o agente (útil em scripts / testes)."""
+    g = build_graph()
+    out = g.invoke(
+        {"messages": [HumanMessage(content=mensagem_utilizador)]},
+        config={"configurable": {"thread_id": thread_id}},
+    )
+    msgs = out.get("messages") or []
+    if not msgs:
+        return ""
+    last = msgs[-1]
+    c = getattr(last, "content", None)
+    return c if isinstance(c, str) else str(c)
+
+================================================================================
+# FICHEIRO: classificador.py
+================================================================================
+
+"""Carrega o classificador treinado e produz probabilidades sobre imagens DermaMNIST (28×28)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import joblib
+import numpy as np
+
+MODELOS_DIR = Path(__file__).resolve().parent / "models"
+_MODELO: Any | None = None
+_META: dict | None = None
+
+
+def _meta() -> dict:
+    global _META
+    if _META is None:
+        p = MODELOS_DIR / "meta.json"
+        _META = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+    return _META
+
+
+def carregar_classificador(force_reload: bool = False) -> Any:
+    global _MODELO
+    if _MODELO is not None and not force_reload:
+        return _MODELO
+    path = MODELOS_DIR / "clf_derma.joblib"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Modelo em falta: {path}. Corra `python treinar_classificador.py` nesta pasta."
+        )
+    _MODELO = joblib.load(path)
+    return _MODELO
+
+
+def prever_de_vector(imagem_flat_normalizada: np.ndarray) -> dict[str, Any]:
+    """`imagem_flat_normalizada`: (784,) floats em [0,1]."""
+    clf = carregar_classificador()
+    x = np.asarray(imagem_flat_normalizada, dtype=np.float32).reshape(1, -1)
+    proba = clf.predict_proba(x)[0]
+    pred = int(np.argmax(proba))
+    classes = _meta().get("classes") or []
+    return {
+        "probabilidades": proba.tolist(),
+        "classe_predita": pred,
+        "rotulo_predito": classes[pred] if pred < len(classes) else str(pred),
+        "confianca_maxima": float(np.max(proba)),
+    }
+
+
+def prever_de_pil_28x28(pil_image) -> dict[str, Any]:
+    from PIL import Image
+
+    img = pil_image.convert("L").resize((28, 28))
+    arr = np.asarray(img, dtype=np.float32).reshape(-1) / 255.0
+    return prever_de_vector(arr)
+
+
+def vetor_de_amostra_medmnist(split: str, indice: int) -> tuple[np.ndarray, int]:
+    """Devolve (x_flat_norm, y_verdadeiro) para uma entrada do DermaMNIST."""
+    from medmnist import DermaMNIST
+
+    ds = DermaMNIST(split=split, download=True)
+    if indice < 0 or indice >= len(ds):
+        raise IndexError(f"Índice {indice} fora do intervalo [0, {len(ds) - 1}]")
+    img, label = ds[indice]
+    if hasattr(img, "convert"):
+        arr = np.asarray(img.convert("L"), dtype=np.float32)
+    else:
+        arr = np.asarray(img, dtype=np.float32)
+    if arr.ndim == 3:
+        arr = np.squeeze(arr)
+    y = int(np.asarray(label).reshape(-1)[0])
+    x = arr.reshape(-1) / 255.0
+    return x, y
+
+================================================================================
+# FICHEIRO: mongo_store.py
+================================================================================
+
+"""Persistência dos casos de triagem em **MongoDB** (resultados do classificador + prioridade)."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Any
+
+from pymongo import MongoClient
+from pymongo.collection import Collection
+
+from triagem import nome_patologia_prioritaria
+
+
+def uri_mongodb() -> str:
+    return (
+        os.environ.get("MONGODB_URI")
+        or os.environ.get("EX10_MONGODB_URI")
+        or "mongodb://curso:curso@127.0.0.1:27018/triagem?authSource=admin"
+    ).strip()
+
+
+_COLL: Collection | None = None
+
+
+def coll_casos() -> Collection:
+    global _COLL
+    if _COLL is not None:
+        return _COLL
+    client = MongoClient(uri_mongodb(), serverSelectionTimeoutMS=8000)
+    # URI …/triagem define a BD por defeito
+    db = client.get_database("triagem")
+    coll = db["casos"]
+    coll.create_index("caso_id", unique=True)
+    coll.create_index([("estado", 1), ("prioridade", -1)])
+    _COLL = coll
+    return coll
+
+
+def inserir_caso(
+    *,
+    caso_id: str,
+    origem: str,
+    indice_amostra: int | None,
+    split: str | None,
+    rotulo_verdadeiro: int | None,
+    resultado_classificador: dict[str, Any],
+    prioridade: float,
+) -> str:
+    doc = {
+        "caso_id": caso_id,
+        "origem": origem,
+        "indice_amostra": indice_amostra,
+        "split": split,
+        "rotulo_verdadeiro": rotulo_verdadeiro,
+        "probabilidades": resultado_classificador["probabilidades"],
+        "classe_predita": resultado_classificador["classe_predita"],
+        "rotulo_predito": resultado_classificador["rotulo_predito"],
+        "confianca_maxima": resultado_classificador["confianca_maxima"],
+        "prioridade": prioridade,
+        "patologia_prioritaria_nome": nome_patologia_prioritaria(),
+        "estado": "pendente",
+        "criado_em": datetime.now(timezone.utc),
+    }
+    coll_casos().update_one({"caso_id": caso_id}, {"$set": doc}, upsert=True)
+    return caso_id
+
+
+def listar_top_prioridade(limite: int = 10) -> list[dict[str, Any]]:
+    cur = (
+        coll_casos()
+        .find({"estado": "pendente"})
+        .sort("prioridade", -1)
+        .limit(limite)
+    )
+    return list(cur)
+
+
+def contar_pendentes() -> int:
+    return coll_casos().count_documents({"estado": "pendente"})
+
+
+def marcar_atendido(caso_id: str) -> bool:
+    r = coll_casos().update_one(
+        {"caso_id": caso_id},
+        {"$set": {"estado": "atendido", "atendido_em": datetime.now(timezone.utc)}},
+    )
+    return r.modified_count > 0
+
+
+def obter_caso(caso_id: str) -> dict[str, Any] | None:
+    return coll_casos().find_one({"caso_id": caso_id})
+
+================================================================================
+# FICHEIRO: treinar_classificador.py
+================================================================================
+
+"""Treina um classificador leve (regressão logística) sobre **DermaMNIST** e grava `models/clf_derma.joblib`.
+
+Dados: conjunto público **MedMNIST** (DermaMNIST), derivado de imagens dermatoscópicas agregadas
+(HAM10000, etc.) — uso académico; ver https://medmnist.com/ .
+
+Uso na pasta do exercício:
+  python treinar_classificador.py
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import joblib
+import numpy as np
+from medmnist import DermaMNIST
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
+
+from triagem import CLASSES_DERMA_MNIST
+
+MODELOS_DIR = Path(__file__).resolve().parent / "models"
+
+
+def _carregar_xy(split: str) -> tuple[np.ndarray, np.ndarray]:
+    ds = DermaMNIST(split=split, download=True)
+    xs: list[np.ndarray] = []
+    ys: list[int] = []
+    for i in range(len(ds)):
+        img, lab = ds[i]
+        if hasattr(img, "convert"):
+            arr = np.asarray(img.convert("L"), dtype=np.float32)
+        else:
+            arr = np.asarray(img, dtype=np.float32)
+        if arr.ndim == 3:
+            arr = np.squeeze(arr)
+        xs.append(arr.reshape(-1) / 255.0)
+        ys.append(int(np.asarray(lab).reshape(-1)[0]))
+    return np.stack(xs), np.array(ys, dtype=np.int64)
+
+
+def main() -> None:
+    MODELOS_DIR.mkdir(parents=True, exist_ok=True)
+    print("[ex10] A descarregar DermaMNIST (primeira vez pode demorar)…", flush=True)
+    x_train, y_train = _carregar_xy("train")
+    x_val, y_val = _carregar_xy("val")
+
+    # Subconjunto para treino rápido em CPU (pode aumentar para melhor métrica)
+    rng = np.random.default_rng(42)
+    n = min(5000, len(x_train))
+    idx = rng.choice(len(x_train), size=n, replace=False)
+    x_sub, y_sub = x_train[idx], y_train[idx]
+
+    x_tr, x_te, y_tr, y_te = train_test_split(
+        x_sub, y_sub, test_size=0.15, random_state=42, stratify=y_sub
+    )
+    clf = LogisticRegression(
+        max_iter=300,
+        class_weight="balanced",
+        solver="lbfgs",
+        random_state=42,
+    )
+    clf.fit(x_tr, y_tr)
+    print(classification_report(y_te, clf.predict(x_te), target_names=list(CLASSES_DERMA_MNIST)))
+
+    modelo_path = MODELOS_DIR / "clf_derma.joblib"
+    joblib.dump(clf, modelo_path)
+    meta = {
+        "classes": list(CLASSES_DERMA_MNIST),
+        "image_shape": [28, 28],
+        "val_samples": len(x_val),
+    }
+    (MODELOS_DIR / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"[ex10] Modelo gravado em {modelo_path}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+# FICHEIRO: triagem.py
+================================================================================
+
+"""Regras de **prioridade** para triagem (combina confiança do classificador e patologia alvo).
+
+A patologia prioritária por defeito é **melanoma** (índice 4 em DermaMNIST / MedMNIST).
+Altere com `INDICE_PATOLOGIA_PRIORITARIA` ou variável de ambiente `EX10_PATOLOGIA_INDICE`.
+"""
+
+from __future__ import annotations
+
+import os
+
+
+# Ordem MedMNIST DermaMNIST (7 classes)
+CLASSES_DERMA_MNIST: tuple[str, ...] = (
+    "actinic_keratoses_and_intraepithelial_carcinoma",
+    "basal_cell_carcinoma",
+    "benign_keratosis_like_lesions",
+    "dermatofibroma",
+    "melanoma",
+    "melanocytic_nevi",
+    "vascular_lesions",
+)
+
+
+def indice_patologia_prioritaria() -> int:
+    raw = os.environ.get("EX10_PATOLOGIA_INDICE", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 4  # melanoma
+
+
+def nome_patologia_prioritaria() -> str:
+    i = indice_patologia_prioritaria()
+    if 0 <= i < len(CLASSES_DERMA_MNIST):
+        return CLASSES_DERMA_MNIST[i]
+    return "desconhecida"
+
+
+def calcular_prioridade(
+    probabilidades: list[float],
+    classe_predita: int,
+) -> float:
+    """Score 0–100: maior → atendimento mais urgente (heurística pedagógica)."""
+    if not probabilidades or classe_predita < 0 or classe_predita >= len(probabilidades):
+        return 0.0
+    alvo = indice_patologia_prioritaria()
+    conf_top = float(probabilidades[classe_predita])
+    prob_alvo = float(probabilidades[alvo]) if alvo < len(probabilidades) else 0.0
+    score = conf_top * 45.0
+    if classe_predita == alvo:
+        score += 35.0
+    score += prob_alvo * 25.0
+    return round(min(100.0, score), 2)
+
+
+================================================================================
+# FICHEIRO: exercicio_10_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 10 — Triagem de **imagens** (DermaMNIST) + **MongoDB** + agente
+# 
+# - **Dados:** subconjunto público **DermaMNIST** (MedMNIST; imagens 28×28 derivadas de conjuntos dermatoscópicos agregados — citar Yang et al., MedMNIST).
+# - **Classificador:** regressão logística sobre pixeis (treino rápido em CPU); grava `models/clf_derma.joblib`.
+# - **Prioridade:** heurística em `triagem.py` (patologia alvo configurável, predef.: **melanoma**, índice 4).
+# - **Persistência:** coleção `casos` na BD MongoDB `triagem`.
+# - **Agente:** `agent_triagem.py` (LangGraph ReAct) com ferramentas para processar amostras, listar fila e marcar atendido.
+# 
+# **Arranque:** `./run.sh` (sobe Mongo + Jupyter). No contentor: `MONGODB_URI=mongodb://curso:curso@mongo:27017/triagem?authSource=admin`.
+
+# --- Célula 1 (código) ---
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+for p in (Path.cwd(), *Path.cwd().parents):
+    env = p / ".env"
+    if env.is_file():
+        load_dotenv(env)
+        break
+
+_ex = Path.cwd().resolve().parent
+if str(_ex) not in sys.path:
+    sys.path.insert(0, str(_ex))
+
+# --- Célula 2 (markdown) ---
+# ## 1. Treinar o classificador (primeira vez)
+
+# --- Célula 3 (código) ---
+# Demora vários minutos na primeira execução (download DermaMNIST).
+# import treinar_classificador as tr
+# tr.main()
+
+# --- Célula 4 (markdown) ---
+# ## 2. Processar uma amostra e gravar no MongoDB
+
+# --- Célula 5 (código) ---
+from agent_triagem import processar_amostra_derma
+
+print(processar_amostra_derma.invoke({"split": "val", "indice": 0}))
+
+# --- Célula 6 (markdown) ---
+# ## 3. Consultar fila e agente (linguagem natural)
+
+# --- Célula 7 (código) ---
+from agent_triagem import convidar_triagem
+
+print(convidar_triagem("Lista os 5 casos pendentes com maior prioridade e resume em bullets."))

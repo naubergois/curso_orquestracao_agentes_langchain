@@ -1,0 +1,12 @@
+# Jupyter — ex. 10 sem ecrã (DermaMNIST + MongoDB + agente). Ver run_jupyter.sh .
+# CPU PyTorch via índice oficial — imagem grande na primeira build.
+FROM quay.io/jupyter/minimal-notebook:python-3.12.11
+
+USER root
+COPY requirements.txt /tmp/requirements-ex10-sem.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex10-sem.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}

@@ -1,0 +1,149 @@
+"""Exercício 10 — triagem de lesões (DermaMNIST) + MongoDB + agente ReAct."""
+
+from __future__ import annotations
+
+import os
+import sys
+import uuid
+from pathlib import Path
+
+import streamlit as st
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage, HumanMessage
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+for _p in (HERE / "sem_ecra", HERE.parent / "10_triagem_imagens_patologia_sem_ecra"):
+    if (_p / "agent_triagem.py").is_file():
+        sys.path.insert(0, str(_p.resolve()))
+        break
+
+for d in (HERE, HERE.parent, *HERE.parents):
+    env = d / ".env"
+    if env.is_file():
+        load_dotenv(env, override=False)
+        break
+
+st.set_page_config(page_title="Ex. 10 — Triagem imagens", page_icon="🩺")
+
+st.title("Exercício 10 — Triagem com classificador e MongoDB")
+st.caption(
+    "**DermaMNIST** (MedMNIST, dados públicos). Classificador sklearn + prioridade para patologia configurável "
+    "(predef.: melanoma). Agente com ferramentas para processar amostras, ver fila e finalizar atendimento."
+)
+
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+
+
+def _sem() -> Path:
+    for p in (HERE / "sem_ecra", HERE.parent / "10_triagem_imagens_patologia_sem_ecra"):
+        if (p / "agent_triagem.py").is_file():
+            return p.resolve()
+    return HERE / "sem_ecra"
+
+
+def texto_agente(msg) -> str:
+    c = getattr(msg, "content", None)
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts = []
+        for b in c:
+            if isinstance(b, dict) and b.get("type") == "text":
+                parts.append(b.get("text", ""))
+        return "\n".join(parts) if parts else str(c)
+    return str(c)
+
+
+@st.cache_resource
+def graph():
+    from agent_triagem import build_graph
+
+    return build_graph()
+
+
+# ——— Mongo fila ———
+with st.sidebar:
+    st.subheader("Modelo")
+    sem = _sem()
+    modelo_ok = (sem / "models" / "clf_derma.joblib").is_file()
+    if not modelo_ok:
+        st.warning("Modelo em falta. No contentor ou venv: `python treinar_classificador.py`")
+    if st.button("Treinar classificador (terminal integrado)"):
+        st.info(
+            f"Execute no diretório `{sem.name}`:  `python treinar_classificador.py`  "
+            "(demora e descarrega DermaMNIST)."
+        )
+
+    st.subheader("Processamento em lote")
+    split = st.selectbox("Split MedMNIST", ("val", "test", "train"), index=0)
+    i0 = st.number_input("Índice inicial", 0, 10000, 0)
+    n = st.number_input("Quantas amostras", 1, 50, 5)
+    if st.button("Classificar e gravar no Mongo", type="primary"):
+        from agent_triagem import processar_amostra_derma
+
+        bar = st.progress(0.0)
+        try:
+            for k in range(int(n)):
+                r = processar_amostra_derma.invoke({"split": split, "indice": int(i0) + k})
+                st.caption(str(r)[:500])
+                bar.progress((k + 1) / int(n))
+        except Exception as e:
+            st.error(str(e))
+        finally:
+            bar.empty()
+        st.success("Lote concluído (ver fila abaixo).")
+    st.divider()
+    if st.button("Nova conversa (agente)"):
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.rerun()
+
+try:
+    from mongo_store import contar_pendentes, listar_top_prioridade
+
+    pend = contar_pendentes()
+    st.metric("Casos pendentes na fila", pend)
+    tops = listar_top_prioridade(12)
+    if tops:
+        st.subheader("Top prioridade (pendentes)")
+        for r in tops:
+            d = {k: v for k, v in r.items() if k != "_id"}
+            st.write(
+                f"**{d.get('caso_id')}** — {d.get('prioridade')} — "
+                f"{d.get('rotulo_predito')} — conf {d.get('confianca_maxima', 0):.3f}"
+            )
+except Exception as e:
+    st.error(f"MongoDB: {e}")
+    st.caption("Verifique MONGODB_URI e se o serviço **mongo** está a correr (Docker).")
+
+# ——— Chat agente ———
+st.subheader("Chat com o agente de triagem")
+for m in st.session_state.get("agent_msgs", []):
+    role, content = m
+    with st.chat_message(role):
+        st.markdown(content)
+
+user = st.chat_input("Ex.: «Mostra a fila por prioridade» ou «Processa val índice 7»")
+if user:
+    msgs_hist = st.session_state.setdefault("agent_msgs", [])
+    msgs_hist.append(("user", user))
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        msgs_hist.append(("assistant", "Defina GOOGLE_API_KEY no `.env`."))
+        st.rerun()
+    try:
+        g = graph()
+        out = g.invoke(
+            {"messages": [HumanMessage(content=user)]},
+            config={"configurable": {"thread_id": st.session_state.thread_id}},
+        )
+        raw = out.get("messages") or []
+        last_a = None
+        for m in reversed(raw):
+            if isinstance(m, AIMessage):
+                last_a = texto_agente(m)
+                break
+        msgs_hist.append(("assistant", last_a or "(sem resposta textual)"))
+    except Exception as e:
+        msgs_hist.append(("assistant", f"Erro: {e}"))
+    st.rerun()

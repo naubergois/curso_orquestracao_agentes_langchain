@@ -1,0 +1,15 @@
+# Jupyter — ex. 9 sem ecrã (RAG, Chroma, múltiplos embeddings). Ver run_jupyter.sh.
+#
+# `minimal-notebook:latest` acompanha Python 3.13+; em aarch64 o `chroma-hnswlib` (dependência do
+# chromadb) muitas vezes **não** tem wheel cp313 e tenta compilar — falhando com
+# «Unsupported compiler» no detetor C++11. A etiqueta `python-3.12.11` mantém wheels binários.
+FROM quay.io/jupyter/minimal-notebook:python-3.12.11
+
+USER root
+COPY requirements.txt /tmp/requirements-ex09-sem.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex09-sem.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}

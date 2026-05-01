@@ -1,0 +1,54 @@
+# Streamlit + PostgreSQL — ex. 9 (RAG jurídico híbrido). Build com contexto `exercicios/`.
+name: curso-ex09-com-ecra
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curso
+      POSTGRES_PASSWORD: curso
+      POSTGRES_DB: juridico
+    volumes:
+      - ../09_rag_juridico_sem_ecra/init_db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curso -d juridico"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  streamlit:
+    build:
+      context: ..
+      dockerfile: 09_rag_juridico_com_ecra/Dockerfile
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+      - ex09_chroma:/app/sem_ecra/chroma_juridico
+      - ex09_pdfs:/app/sem_ecra/pdf_fontes
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX09: ${GEMINI_MODEL_EX09:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      GEMINI_EMBEDDING_MODEL_004: ${GEMINI_EMBEDDING_MODEL_004:-}
+      GEMINI_EMBEDDING_MODEL_LEGACY: ${GEMINI_EMBEDDING_MODEL_LEGACY:-}
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-}
+      FASTEMBED_CACHE_DIR: ${FASTEMBED_CACHE_DIR:-}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-}
+      GEMINI_EMBEDDING_MODEL_ALT: ${GEMINI_EMBEDDING_MODEL_ALT:-}
+      DATABASE_URL: postgresql://curso:curso@db:5432/juridico
+      ANONYMIZED_TELEMETRY: "false"
+      CHROMADB_ANONYMIZED_TELEMETRY: "false"
+      PYTHONUNBUFFERED: "1"
+
+volumes:
+  ex09_chroma: {}
+  ex09_pdfs: {}

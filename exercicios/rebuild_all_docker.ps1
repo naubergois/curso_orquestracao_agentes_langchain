@@ -41,7 +41,11 @@ $stacks = @(
     @{ Dir = '06_memoria_langchain_sem_ecra'; File = 'docker-compose.jupyter.yml' },
     @{ Dir = '07_precos_clima_cotacao'; File = 'docker-compose.yml' },
     @{ Dir = '07_precos_clima_cotacao_sem_ecra'; File = 'docker-compose.jupyter.yml' },
-    @{ Dir = '08_chains_complexas_sem_ecra'; File = 'docker-compose.jupyter.yml' }
+    @{ Dir = '08_chains_complexas_sem_ecra'; File = 'docker-compose.jupyter.yml' },
+    @{ Dir = '09_rag_juridico_sem_ecra'; File = 'docker-compose.jupyter.yml' },
+    @{ Dir = '09_rag_juridico_com_ecra'; File = 'docker-compose.yml' },
+    @{ Dir = '10_triagem_imagens_patologia_sem_ecra'; File = 'docker-compose.jupyter.yml' },
+    @{ Dir = '10_triagem_imagens_patologia_com_ecra'; File = 'docker-compose.yml' }
 )
 
 foreach ($s in $stacks) {

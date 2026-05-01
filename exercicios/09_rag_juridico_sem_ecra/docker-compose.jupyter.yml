@@ -1,0 +1,58 @@
+# Jupyter + PostgreSQL — ex. 9 sem ecrã (RAG sobre PDFs + processos fictícios em SQL). Ver run_jupyter.sh.
+name: curso-ex09-sem-jupyter
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curso
+      POSTGRES_PASSWORD: curso
+      POSTGRES_DB: juridico
+    ports:
+      - "${EX09_POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - ./init_db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curso -d juridico"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX09: ${GEMINI_MODEL_EX09:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      GEMINI_EMBEDDING_MODEL_004: ${GEMINI_EMBEDDING_MODEL_004:-}
+      GEMINI_EMBEDDING_MODEL_LEGACY: ${GEMINI_EMBEDDING_MODEL_LEGACY:-}
+      FASTEMBED_MODEL: ${FASTEMBED_MODEL:-}
+      FASTEMBED_CACHE_DIR: ${FASTEMBED_CACHE_DIR:-}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-}
+      GEMINI_EMBEDDING_MODEL_ALT: ${GEMINI_EMBEDDING_MODEL_ALT:-}
+      DATABASE_URL: postgresql://curso:curso@db:5432/juridico
+      ANONYMIZED_TELEMETRY: "false"
+      CHROMADB_ANONYMIZED_TELEMETRY: "false"
+      PYTHONUNBUFFERED: "1"
+      JUPYTER_TOKEN: ""
+    volumes:
+      - ../../:/home/jovyan/work/repo:rw
+      - ../../.env:/home/jovyan/work/repo/.env:ro
+    working_dir: /home/jovyan/work/repo/exercicios/09_rag_juridico_sem_ecra
+    command:
+      - start-notebook.sh
+      - --ServerApp.token=
+      - --ServerApp.password=
+      - --ServerApp.ip=0.0.0.0

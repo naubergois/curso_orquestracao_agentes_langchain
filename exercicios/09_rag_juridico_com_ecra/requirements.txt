@@ -1,0 +1,15 @@
+python-dotenv>=1.0.0,<2
+psycopg2-binary>=2.9.0,<3
+langgraph>=0.2.0,<2
+langchain-core>=0.3.0
+langchain-google-genai>=4.0.0,<5
+langchain-community>=0.3.0
+langchain-chroma>=0.1.0,<0.3.0
+langchain-text-splitters>=0.3.0
+chromadb>=0.5.0,<1
+# posthog>=6 altera capture(); chromadb chama a API antiga (telemetria falha em stderr).
+posthog>=2.4.0,<6.0.0
+reportlab>=4.0.0,<5
+pypdf>=4.0.0,<6
+fastembed>=0.3.0,<1
+streamlit>=1.40.0,<2

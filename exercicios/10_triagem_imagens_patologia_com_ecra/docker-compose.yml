@@ -1,0 +1,39 @@
+# Streamlit + MongoDB — ex. 10 com ecrã (triagem DermaMNIST + agente).
+name: curso-ex10-com-ecra
+
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "${MONGO_EX10_PORT:-27018}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: curso
+      MONGO_INITDB_ROOT_PASSWORD: curso
+    volumes:
+      - ex10_mongo_data:/data/db
+
+  streamlit:
+    build:
+      context: ..
+      dockerfile: 10_triagem_imagens_patologia_com_ecra/Dockerfile
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    depends_on:
+      - mongo
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+      - ../10_triagem_imagens_patologia_sem_ecra/models:/app/sem_ecra/models
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX10: ${GEMINI_MODEL_EX10:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      MONGODB_URI: mongodb://curso:curso@mongo:27017/triagem?authSource=admin
+      EX10_PATOLOGIA_INDICE: ${EX10_PATOLOGIA_INDICE:-}
+      PYTHONUNBUFFERED: "1"
+
+volumes:
+  ex10_mongo_data: {}

@@ -2,11 +2,13 @@
 
 Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Docker) e **sem ecrã** (`…_sem_ecra`, Jupyter Lab + Docker), mais utilitários partilhados.
 
-- **Gemini (Google AI):** exercícios **00–03** e **05–08** — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
+- **Gemini (Google AI):** exercícios **00–03** e **05–10** (excepto o **04**) — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
 - **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
 - **Ex. 05 (só Jupyter):** LCEL e *prompt templates* — opcional **`GEMINI_MODEL_EX05`**, senão **`GEMINI_MODEL`**; **`GEMINI_MODEL_FALLBACKS`** opcional (ver GUIA §9.2).
 - **Ex. 06 (só Jupyter):** memória / histórico — `RunnableWithMessageHistory`, lista manual, `trim_messages`; opcional **`GEMINI_MODEL_EX06`**.
 - **Ex. 08 (só Jupyter):** LCEL avançado — `RunnableParallel`, `RunnablePassthrough.assign`, `RunnableBranch`, `RunnableLambda`, `itemgetter`; opcional **`GEMINI_MODEL_EX08`**.
+- **Ex. 09:** **RAG** sobre PDFs pedagógicos com **Chroma** (vários embeddings: FastEmbed local + **Gemini**); **PostgreSQL** com processos fictícios e **RAG híbrido** (SQL estruturado + excertos PDF). Jupyter inclui serviço `db` e `DATABASE_URL`.
+- **Ex. 10:** **Triagem** com **DermaMNIST** (MedMNIST), classificador **sklearn**, **MongoDB** e agente ReAct; variáveis `GEMINI_MODEL_EX10`, `MONGODB_URI`, etc. (ver `.env.example`).
 
 ## Início rápido
 
@@ -46,6 +48,10 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 | **07** | `07_precos_clima_cotacao` | **Agente ReAct** com **treze *tools*** — preços (MLB), clima (Fortaleza), USD/BRL e EUR/BRL, Wikipédia PT, DuckDuckGo instantâneo, CEP e feriados (BrasilAPI), calculadora, data/hora por fuso, conversão °C→°F, extração de URLs, SHA-256 (padrões típicos LangChain / tutoriais). Streamlit; **Internet**. |
 | | `07_precos_clima_cotacao_sem_ecra` | O mesmo conjunto de *tools* no **Jupyter** (caderno alinhado ao `agent.py`). |
 | **08** | `08_chains_complexas_sem_ecra` | **Cadeias LCEL compostas:** paralelo, `assign`, ramificação condicional, `Lambda`, `itemgetter`, *pipeline* que funde vários ramos — quando usar LangGraph vs LCEL. **Só Jupyter.** |
+| **09** | `09_rag_juridico_com_ecra` | **RAG jurídico (pedagógico):** PDFs (ReportLab ou agente), **Chroma** com três coleções de embeddings, chat Streamlit; opcão **híbrida** com Postgres (`docker-compose` com `db`). |
+| | `09_rag_juridico_sem_ecra` | Mesmo fluxo no **Jupyter** + caderno com **LCEL explícito** e consulta SQL demonstrativa; `init_db/` para Postgres. |
+| **10** | `10_triagem_imagens_patologia_com_ecra` | **Imagens** + **MongoDB** + agente **ReAct** na UI Streamlit (triagem tipo lista de espera). |
+| | `10_triagem_imagens_patologia_sem_ecra` | Notebook com dataset técnico (DermaMNIST) e integração MongoDB. |
 
 **Legenda:** *com ecrã* → Streamlit + `docker-compose.yml`; *sem ecrã* → Jupyter + `docker-compose.jupyter.yml` (quando existir par, o tema é o mesmo; muda só a interface).
 

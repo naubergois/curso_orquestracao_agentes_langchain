@@ -1,0 +1,46 @@
+# Jupyter + MongoDB — ex. 10 sem ecrã (triagem de imagens, agente, MedMNIST).
+name: curso-ex10-sem-jupyter
+
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "${MONGO_EX10_PORT:-27018}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: curso
+      MONGO_INITDB_ROOT_PASSWORD: curso
+    volumes:
+      - ex10_mongo_data:/data/db
+
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    depends_on:
+      - mongo
+    env_file:
+      - ../../.env
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX10: ${GEMINI_MODEL_EX10:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      MONGODB_URI: mongodb://curso:curso@mongo:27017/triagem?authSource=admin
+      EX10_PATOLOGIA_INDICE: ${EX10_PATOLOGIA_INDICE:-}
+      PYTHONUNBUFFERED: "1"
+      JUPYTER_TOKEN: ""
+    volumes:
+      - ../../:/home/jovyan/work/repo:rw
+      - ../../.env:/home/jovyan/work/repo/.env:ro
+    working_dir: /home/jovyan/work/repo/exercicios/10_triagem_imagens_patologia_sem_ecra
+    command:
+      - start-notebook.sh
+      - --ServerApp.token=
+      - --ServerApp.password=
+      - --ServerApp.ip=0.0.0.0
+
+volumes:
+  ex10_mongo_data: {}
