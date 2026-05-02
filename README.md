@@ -13,7 +13,7 @@ Exercícios com **Docker**, **Streamlit** (com ecrã) e **Jupyter Lab** (sem ecr
 | Ficheiro | Conteúdo |
 |----------|----------|
 | [`exercicios/README.md`](exercicios/README.md) | Visão geral, **descrição do que faz cada exercício**, variáveis de ambiente e scripts úteis. |
-| [`empresas-automatizadas-ia/README.md`](empresas-automatizadas-ia/README.md) | **20 exercícios** extra em cenários de empresa (Jupyter por defeito; notebooks didáticos **sem** `from app…`; `app/` espelha API opcional). |
+| [`empresas-automatizadas-ia/README.md`](empresas-automatizadas-ia/README.md) | **20 empresas simuladas**: catálogo com problema de negócio, stack e pasta; Jupyter por defeito; `app/` para FastAPI/UI; **pytest** (`tests/`) e [`docs/GUIA_TESTES.md`](empresas-automatizadas-ia/docs/GUIA_TESTES.md). |
 | [`exemplos/`](exemplos/) | Exemplos pontuais (por exemplo mensagem de sistema em Docker). |
 | [`exercicios/GUIA_NOVOS_EXERCICIOS.md`](exercicios/GUIA_NOVOS_EXERCICIOS.md) | Convenções para criar novos exercícios, compose, variáveis de ambiente e checklist. |
 
