@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Gera `CODIGO_COMPLETO.txt` na raiz de cada pasta `exercicios/NN_*`.
 
+Pastas em `EXTRA_CODIGO_COMPLETO_DIRS` (ex.: `rag_auditoria_rostos_sem_ecra`) geram
+também `CODIGO_COMPLETO.md` com o mesmo corpo num bloco `~~~text`.
+
 Inclui: `requirements.txt` (se existir), todos os `*.py` desse nível, e `*.ipynb`
 do mesmo nível (células markdown comentadas com `# `, células código em bruto).
 Exclui `.ipynb_checkpoints` e subpastas.
@@ -24,6 +27,9 @@ BANNER = """# ==================================================================
 """
 
 EXERCISE_DIR_PATTERN = re.compile(r"^\d\d_.+")
+
+# Pastas sem prefixo `NN_` que também exportam CODIGO_COMPLETO (ex.: RAG auditoria isolado).
+EXTRA_CODIGO_COMPLETO_DIRS = ("rag_auditoria_rostos_sem_ecra",)
 
 PY_ORDER = ("main.py", "agent.py", "streamlit_app.py")
 
@@ -90,19 +96,46 @@ def generate_for_exercise_dir(ex_dir: Path) -> str:
     return "".join(parts).rstrip() + "\n"
 
 
+def generate_codigo_completo_markdown(ex_dir: Path, titulo: str) -> str:
+    """Markdown com o mesmo corpo que CODIGO_COMPLETO.txt (bloco `~~~text` para evitar conflitos)."""
+    corpo = generate_for_exercise_dir(ex_dir)
+    safe = corpo.replace("~~~", "~ ~ ~")
+    return (
+        f"# {titulo}\n\n"
+        "Export estático — mesmo conteúdo que `CODIGO_COMPLETO.txt`. "
+        "Gerado por `exercicios/gerar_codigo_completo_txt.py`.\n\n"
+        f"~~~text\n{safe}\n~~~\n"
+    )
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent
     exercise_dirs = sorted(
         d for d in root.iterdir() if d.is_dir() and EXERCISE_DIR_PATTERN.match(d.name)
     )
-    if not exercise_dirs:
-        raise SystemExit("Nenhuma pasta NN_* encontrada em exercicios/.")
+    extra_dirs = [root / name for name in EXTRA_CODIGO_COMPLETO_DIRS if (root / name).is_dir()]
+
+    if not exercise_dirs and not extra_dirs:
+        raise SystemExit("Nenhuma pasta NN_* nem extras encontrada em exercicios/.")
 
     for ex_dir in exercise_dirs:
         out = ex_dir / "CODIGO_COMPLETO.txt"
         text = generate_for_exercise_dir(ex_dir)
         out.write_text(text, encoding="utf-8")
         print(f"Escrito: {out.relative_to(root.parent)}")
+
+    for ex_dir in extra_dirs:
+        text = generate_for_exercise_dir(ex_dir)
+        (ex_dir / "CODIGO_COMPLETO.txt").write_text(text, encoding="utf-8")
+        print(f"Escrito: {(ex_dir / 'CODIGO_COMPLETO.txt').relative_to(root.parent)}")
+        md_path = ex_dir / "CODIGO_COMPLETO.md"
+        titulo = (
+            "CODIGO_COMPLETO — RAG multimodal (relatórios + rostos LFW + achados estruturados)"
+            if ex_dir.name == "rag_auditoria_rostos_sem_ecra"
+            else f"CODIGO_COMPLETO — {ex_dir.name}"
+        )
+        md_path.write_text(generate_codigo_completo_markdown(ex_dir, titulo), encoding="utf-8")
+        print(f"Escrito: {md_path.relative_to(root.parent)}")
 
 
 if __name__ == "__main__":

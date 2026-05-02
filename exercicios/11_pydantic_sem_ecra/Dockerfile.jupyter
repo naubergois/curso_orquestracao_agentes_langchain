@@ -1,0 +1,11 @@
+# Jupyter — ex. 11 sem ecrã (Pydantic). Arranque: run_jupyter.sh .
+FROM quay.io/jupyter/minimal-notebook:latest
+
+USER root
+COPY requirements.txt /tmp/requirements-ex11-sem.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex11-sem.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}

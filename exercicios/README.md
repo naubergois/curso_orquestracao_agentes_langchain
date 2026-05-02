@@ -2,13 +2,18 @@
 
 Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Docker) e **sem ecrã** (`…_sem_ecra`, Jupyter Lab + Docker), mais utilitários partilhados.
 
-- **Gemini (Google AI):** exercícios **00–03** e **05–10** (excepto o **04**) — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
+Para um **percurso paralelo** com 20 cenários de empresa (mesmo `.env` na raiz, Jupyter por defeito), vê [`../empresas-automatizadas-ia/README.md`](../empresas-automatizadas-ia/README.md).
+
+- **Gemini (Google AI):** exercícios **00–03** e **05–11** e **13** (excepto o **04** e o **12**) — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
 - **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
 - **Ex. 05 (só Jupyter):** LCEL e *prompt templates* — opcional **`GEMINI_MODEL_EX05`**, senão **`GEMINI_MODEL`**; **`GEMINI_MODEL_FALLBACKS`** opcional (ver GUIA §9.2).
 - **Ex. 06 (só Jupyter):** memória / histórico — `RunnableWithMessageHistory`, lista manual, `trim_messages`; opcional **`GEMINI_MODEL_EX06`**.
 - **Ex. 08 (só Jupyter):** LCEL avançado — `RunnableParallel`, `RunnablePassthrough.assign`, `RunnableBranch`, `RunnableLambda`, `itemgetter`; opcional **`GEMINI_MODEL_EX08`**.
 - **Ex. 09:** **RAG** sobre PDFs pedagógicos com **Chroma** (vários embeddings: FastEmbed local + **Gemini**); **PostgreSQL** com processos fictícios e **RAG híbrido** (SQL estruturado + excertos PDF). Jupyter inclui serviço `db` e `DATABASE_URL`.
-- **Ex. 10:** **Triagem** com **DermaMNIST** (MedMNIST), classificador **sklearn**, **MongoDB** e agente ReAct; variáveis `GEMINI_MODEL_EX10`, `MONGODB_URI`, etc. (ver `.env.example`).
+- **Ex. 10:** **Triagem** com **DermaMNIST** (MedMNIST), classificador **Random Forest** (sklearn sobre pixeis 28×28), **MongoDB** e agente ReAct; variáveis `GEMINI_MODEL_EX10`, `MONGODB_URI`, etc. (ver `.env.example`).
+- **Ex. 11:** **Pydantic v2** — modelos, validadores, nested models, JSON Schema; secção opcional **Gemini** com `with_structured_output`; opcional **`GEMINI_MODEL_EX11`** (ver `.env.example`).
+- **Ex. 12 (só Jupyter):** **PDF** + **pypdf** + *text splitters* — **sem LLM** (não precisa de `GOOGLE_API_KEY`).
+- **Ex. 13 (só Jupyter):** agente **ReAct** sobre chunks em RAM; opcional **`GEMINI_MODEL_EX13`**.
 
 ## Início rápido
 
@@ -52,6 +57,9 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 | | `09_rag_juridico_sem_ecra` | Mesmo fluxo no **Jupyter** + caderno com **LCEL explícito** e consulta SQL demonstrativa; `init_db/` para Postgres. |
 | **10** | `10_triagem_imagens_patologia_com_ecra` | **Imagens** + **MongoDB** + agente **ReAct** na UI Streamlit (triagem tipo lista de espera). |
 | | `10_triagem_imagens_patologia_sem_ecra` | Notebook com dataset técnico (DermaMNIST) e integração MongoDB. |
+| **11** | `11_pydantic_sem_ecra` | **Pydantic** (`BaseModel`, `Field`, validadores, nested, JSON Schema) e opcional **saída estruturada** com Gemini. **Só Jupyter.** |
+| **12** | `12_pdf_chunks_split_sem_ecra` | **PDF** pedagógico (ReportLab), texto com **pypdf**, **RecursiveCharacterTextSplitter** vs **CharacterTextSplitter**, overlap e **`Document`** com metadata. **Só Jupyter** (sem LLM obrigatório). |
+| **13** | `13_agente_pdf_sem_ecra` | PDF + chunks em memória e **agente ReAct** (LangGraph + Gemini) com *tools* `estatisticas_corpus`, `procurar_trechos`, `ler_chunk_completo`. Opcional **`GEMINI_MODEL_EX13`**. **Só Jupyter.** |
 
 **Legenda:** *com ecrã* → Streamlit + `docker-compose.yml`; *sem ecrã* → Jupyter + `docker-compose.jupyter.yml` (quando existir par, o tema é o mesmo; muda só a interface).
 

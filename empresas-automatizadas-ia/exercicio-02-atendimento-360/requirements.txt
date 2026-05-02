@@ -1,0 +1,9 @@
+python-dotenv>=1.0.0,<2
+pydantic>=2.7.0,<3
+numpy>=1.26.0,<3
+pandas>=2.1.0,<3
+pyarrow>=15.0.0,<20
+matplotlib>=3.8.0,<4
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+streamlit>=1.40.0,<2

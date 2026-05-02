@@ -91,6 +91,9 @@ build_stack 09_rag_juridico_sem_ecra docker-compose.jupyter.yml
 build_stack 09_rag_juridico_com_ecra docker-compose.yml
 build_stack 10_triagem_imagens_patologia_sem_ecra docker-compose.jupyter.yml
 build_stack 10_triagem_imagens_patologia_com_ecra docker-compose.yml
+build_stack 11_pydantic_sem_ecra docker-compose.jupyter.yml
+build_stack 12_pdf_chunks_split_sem_ecra docker-compose.jupyter.yml
+build_stack 13_agente_pdf_sem_ecra docker-compose.jupyter.yml
 
 if [[ "${WITH_EXEMPLOS}" -eq 1 ]]; then
   echo ""

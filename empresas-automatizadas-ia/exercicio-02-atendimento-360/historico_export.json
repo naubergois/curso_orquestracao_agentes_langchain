@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "content": "O meu nome é João."
+  },
+  {
+    "role": "assistant",
+    "content": "Olá João, tudo bem? Em que posso ajudar hoje?"
+  },
+  {
+    "role": "user",
+    "content": "Qual é o meu nome?"
+  },
+  {
+    "role": "assistant",
+    "content": "O seu nome é João. 😊 Em que posso ajudar hoje, João?"
+  }
+]

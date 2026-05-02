@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    container_name: exercicio_18_api_agent_factory
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../.env
+    volumes:
+      - .:/app

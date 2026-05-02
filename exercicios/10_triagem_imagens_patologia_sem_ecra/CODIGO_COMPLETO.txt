@@ -17,7 +17,7 @@ langchain-google-genai>=4.0.0,<5
 pymongo>=4.6.0,<5
 numpy>=1.26.0,<3
 scikit-learn>=1.3.0,<2
-joblib>=1.3.0,<2
+matplotlib>=3.8.0,<4
 medmnist>=3.0.0,<4
 torch>=2.2.0,<2.10
 torchvision>=0.17.0,<1
@@ -194,7 +194,7 @@ def convidar_triagem(
 # FICHEIRO: classificador.py
 ================================================================================
 
-"""Carrega o classificador treinado e produz probabilidades sobre imagens DermaMNIST (28×28)."""
+"""Carrega a CNN treinada e produz probabilidades sobre imagens DermaMNIST (28×28)."""
 
 from __future__ import annotations
 
@@ -202,12 +202,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-import joblib
 import numpy as np
+import torch
+
+from cnn_derma import construir_resnet18_transfer, preprocess_flat_para_resnet
 
 MODELOS_DIR = Path(__file__).resolve().parent / "models"
-_MODELO: Any | None = None
+_MODELO: torch.nn.Module | None = None
 _META: dict | None = None
+_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _meta() -> dict:
@@ -218,24 +221,33 @@ def _meta() -> dict:
     return _META
 
 
-def carregar_classificador(force_reload: bool = False) -> Any:
+def carregar_classificador(force_reload: bool = False) -> torch.nn.Module:
     global _MODELO
     if _MODELO is not None and not force_reload:
         return _MODELO
-    path = MODELOS_DIR / "clf_derma.joblib"
+
+    path_name = _meta().get("weights_file", "cnn_derma.pt")
+    path = MODELOS_DIR / str(path_name)
     if not path.is_file():
         raise FileNotFoundError(
             f"Modelo em falta: {path}. Corra `python treinar_classificador.py` nesta pasta."
         )
-    _MODELO = joblib.load(path)
+    m = construir_resnet18_transfer(7)
+    state = torch.load(path, map_location=_DEVICE)
+    m.load_state_dict(state)
+    m.eval().to(_DEVICE)
+    _MODELO = m
     return _MODELO
 
 
 def prever_de_vector(imagem_flat_normalizada: np.ndarray) -> dict[str, Any]:
     """`imagem_flat_normalizada`: (784,) floats em [0,1]."""
-    clf = carregar_classificador()
-    x = np.asarray(imagem_flat_normalizada, dtype=np.float32).reshape(1, -1)
-    proba = clf.predict_proba(x)[0]
+    modelo = carregar_classificador()
+    with torch.no_grad():
+        tin = preprocess_flat_para_resnet(imagem_flat_normalizada, _DEVICE)
+        logits = modelo(tin)
+        proba = torch.softmax(logits, dim=1)[0].cpu().numpy()
+
     pred = int(np.argmax(proba))
     classes = _meta().get("classes") or []
     return {
@@ -271,6 +283,68 @@ def vetor_de_amostra_medmnist(split: str, indice: int) -> tuple[np.ndarray, int]
     y = int(np.asarray(label).reshape(-1)[0])
     x = arr.reshape(-1) / 255.0
     return x, y
+
+================================================================================
+# FICHEIRO: cnn_derma.py
+================================================================================
+
+"""ResNet18 com **transfer learning** (ImageNet) para DermaMNIST (7 classes).
+
+As imagens 28×28 são redimensionadas bilinearmente para 224×224, replicadas em 3 canais
+e normalizadas com média/desvio ImageNet — padrão típico ao reutilizar backbone CNN.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torchvision.models import ResNet18_Weights, resnet18
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def construir_resnet18_transfer(num_classes: int = 7) -> nn.Module:
+    pesos = ResNet18_Weights.IMAGENET1K_V1
+    m = resnet18(weights=pesos)
+    embutida = m.fc.in_features
+    m.fc = nn.Linear(embutida, num_classes)
+    return m
+
+
+def preprocess_flat_para_resnet(
+    imagem_flat_784: np.ndarray,
+    device: torch.device,
+) -> torch.Tensor:
+    """`(N, 784)` ou `(784,)` em [0,1] → tensor `(N, 3, 224, 224)` normalizado."""
+    x = np.asarray(imagem_flat_784, dtype=np.float32)
+    if x.ndim == 1:
+        x = x.reshape(1, -1)
+    n = x.shape[0]
+    t = torch.from_numpy(x).view(n, 1, 28, 28)
+    t = torch.nn.functional.interpolate(
+        t,
+        size=(224, 224),
+        mode="bilinear",
+        align_corners=False,
+    )
+    t = t.repeat(1, 3, 1, 1).to(device)
+    mean = torch.tensor(IMAGENET_MEAN, device=device).view(1, 3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, device=device).view(1, 3, 1, 1)
+    return (t - mean) / std
+
+
+def congelar_exceto_fc(modelo: nn.Module) -> None:
+    for p in modelo.parameters():
+        p.requires_grad = False
+    for p in modelo.fc.parameters():
+        p.requires_grad = True
+
+
+def descongelar_layer4(modelo: nn.Module) -> None:
+    for p in modelo.layer4.parameters():
+        p.requires_grad = True
 
 ================================================================================
 # FICHEIRO: mongo_store.py
@@ -373,33 +447,46 @@ def obter_caso(caso_id: str) -> dict[str, Any] | None:
 # FICHEIRO: treinar_classificador.py
 ================================================================================
 
-"""Treina um classificador leve (regressão logística) sobre **DermaMNIST** e grava `models/clf_derma.joblib`.
+"""
+Treino **CNN** (ResNet18 + transfer learning ImageNet) no **DermaMNIST** (MedMNIST).
 
-Dados: conjunto público **MedMNIST** (DermaMNIST), derivado de imagens dermatoscópicas agregadas
-(HAM10000, etc.) — uso académico; ver https://medmnist.com/ .
+- Fase 1: só camada `fc` (backbone congelado).
+- Fase 2: descongela `layer4` + `fc` com learning rate menor.
 
-Uso na pasta do exercício:
-  python treinar_classificador.py
+Saídas:
+- `models/cnn_derma.pt` — state_dict do modelo
+- `models/cnn_derma_meta.json` — hiperparâmetros e métricas
+- `models/meta.json` — compatível com `classificador.py` (classes, forma da imagem, etc.)
 """
 
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
-import joblib
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from medmnist import DermaMNIST
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.utils.class_weight import compute_class_weight
+from torch.utils.data import DataLoader, TensorDataset
 
+from cnn_derma import (
+    construir_resnet18_transfer,
+    congelar_exceto_fc,
+    descongelar_layer4,
+    preprocess_flat_para_resnet,
+)
 from triagem import CLASSES_DERMA_MNIST
 
-MODELOS_DIR = Path(__file__).resolve().parent / "models"
+N_CLASSES = 7
 
 
-def _carregar_xy(split: str) -> tuple[np.ndarray, np.ndarray]:
+def carregar_xy(split: str) -> tuple[np.ndarray, np.ndarray]:
+    """Cada imagem → vector (784,) em [0,1]."""
     ds = DermaMNIST(split=split, download=True)
     xs: list[np.ndarray] = []
     ys: list[int] = []
@@ -416,39 +503,177 @@ def _carregar_xy(split: str) -> tuple[np.ndarray, np.ndarray]:
     return np.stack(xs), np.array(ys, dtype=np.int64)
 
 
+def _one_epoch(
+    modelo: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer | None,
+    treino: bool,
+) -> tuple[float, float]:
+    if treino:
+        modelo.train()
+    else:
+        modelo.eval()
+    loss_acc = 0.0
+    correct = 0
+    total = 0
+    with torch.set_grad_enabled(treino):
+        for xb, yb in loader:
+            yb = yb.to(device)
+            t_in = preprocess_flat_para_resnet(xb.numpy(), device)
+            if treino and optimizer is not None:
+                optimizer.zero_grad(set_to_none=True)
+            logits = modelo(t_in)
+            loss = criterion(logits, yb)
+            if treino and optimizer is not None:
+                loss.backward()
+                optimizer.step()
+            loss_acc += loss.item() * xb.size(0)
+            pred = logits.argmax(dim=1)
+            correct += (pred == yb).sum().item()
+            total += xb.size(0)
+    return loss_acc / max(total, 1), correct / max(total, 1)
+
+
+def _evaluate(
+    modelo: nn.Module,
+    x_val: np.ndarray,
+    y_val: np.ndarray,
+    device: torch.device,
+    batch_size: int,
+) -> tuple[list[int], list[int]]:
+    modelo.eval()
+    y_pred: list[int] = []
+    y_true: list[int] = []
+    n = len(x_val)
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            sl = slice(start, min(start + batch_size, n))
+            xb = x_val[sl]
+            yb = y_val[sl]
+            t_in = preprocess_flat_para_resnet(xb, device)
+            logits = modelo(t_in)
+            preds = logits.argmax(dim=1).cpu().numpy().tolist()
+            y_pred.extend(preds)
+            y_true.extend(yb.tolist())
+    return y_true, y_pred
+
+
 def main() -> None:
-    MODELOS_DIR.mkdir(parents=True, exist_ok=True)
-    print("[ex10] A descarregar DermaMNIST (primeira vez pode demorar)…", flush=True)
-    x_train, y_train = _carregar_xy("train")
-    x_val, y_val = _carregar_xy("val")
+    t0 = time.perf_counter()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Subconjunto para treino rápido em CPU (pode aumentar para melhor métrica)
-    rng = np.random.default_rng(42)
-    n = min(5000, len(x_train))
-    idx = rng.choice(len(x_train), size=n, replace=False)
-    x_sub, y_sub = x_train[idx], y_train[idx]
+    out_dir = Path(__file__).resolve().parent / "models"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path_pt = out_dir / "cnn_derma.pt"
+    path_train_meta = out_dir / "cnn_derma_meta.json"
+    path_app_meta = out_dir / "meta.json"
 
-    x_tr, x_te, y_tr, y_te = train_test_split(
-        x_sub, y_sub, test_size=0.15, random_state=42, stratify=y_sub
+    print("[ex10] A carregar DermaMNIST (primeira vez pode demorar)…", flush=True)
+    x_train, y_train = carregar_xy("train")
+    x_val, y_val = carregar_xy("val")
+
+    print(
+        f"Formas: train {x_train.shape}, val {x_val.shape}. "
+        f"Device: {device}.",
+        flush=True,
     )
-    clf = LogisticRegression(
-        max_iter=300,
-        class_weight="balanced",
-        solver="lbfgs",
-        random_state=42,
-    )
-    clf.fit(x_tr, y_tr)
-    print(classification_report(y_te, clf.predict(x_te), target_names=list(CLASSES_DERMA_MNIST)))
 
-    modelo_path = MODELOS_DIR / "clf_derma.joblib"
-    joblib.dump(clf, modelo_path)
-    meta = {
+    batch = 64
+    ds_tr = TensorDataset(
+        torch.from_numpy(x_train).float(), torch.from_numpy(y_train).long()
+    )
+    ds_val = TensorDataset(
+        torch.from_numpy(x_val).float(), torch.from_numpy(y_val).long()
+    )
+    dl_tr = DataLoader(ds_tr, batch_size=batch, shuffle=True, num_workers=0)
+    dl_val = DataLoader(ds_val, batch_size=batch, shuffle=False, num_workers=0)
+
+    modelo = construir_resnet18_transfer(N_CLASSES).to(device)
+    congelar_exceto_fc(modelo)
+
+    cw = compute_class_weight("balanced", classes=np.arange(N_CLASSES), y=y_train)
+    pesos = torch.tensor(cw, dtype=torch.float32, device=device)
+    criterion = nn.CrossEntropyLoss(weight=pesos)
+
+    lr_fc = 1e-2
+    epochs_fc = 6
+    opt = optim.AdamW(modelo.fc.parameters(), lr=lr_fc, weight_decay=1e-4)
+
+    for ep in range(epochs_fc):
+        loss_tr, acc_tr = _one_epoch(modelo, dl_tr, device, criterion, opt, True)
+        loss_ev, acc_ev = _one_epoch(modelo, dl_val, device, criterion, None, False)
+        print(
+            f"  [FC] Epoch {ep + 1}/{epochs_fc} | "
+            f"train loss={loss_tr:.4f} acc={acc_tr:.4f} | "
+            f"val loss={loss_ev:.4f} acc={acc_ev:.4f}",
+            flush=True,
+        )
+
+    descongelar_layer4(modelo)
+    opt2 = optim.AdamW(
+        [p for p in modelo.parameters() if p.requires_grad],
+        lr=1e-4,
+        weight_decay=1e-4,
+    )
+    epochs_ft = 5
+    for ep in range(epochs_ft):
+        loss_tr, acc_tr = _one_epoch(modelo, dl_tr, device, criterion, opt2, True)
+        loss_ev, acc_ev = _one_epoch(modelo, dl_val, device, criterion, None, False)
+        print(
+            f"  [FT] Epoch {ep + 1}/{epochs_ft} | "
+            f"train loss={loss_tr:.4f} acc={acc_tr:.4f} | "
+            f"val loss={loss_ev:.4f} acc={acc_ev:.4f}",
+            flush=True,
+        )
+
+    y_true, y_pred = _evaluate(modelo, x_val, y_val, device, batch_size=batch)
+    relatorio = classification_report(
+        y_true,
+        y_pred,
+        target_names=list(CLASSES_DERMA_MNIST),
+        digits=3,
+        zero_division=0,
+    )
+    print("\n=== Relatório (split `val` MedMNIST) ===\n", relatorio, flush=True)
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(N_CLASSES)))
+
+    torch.save(modelo.state_dict(), path_pt)
+
+    train_extra = {
+        "modelo": "ResNet18 transfer (ImageNet1K_V1) + fc 7 classes",
+        "arquivo_pt": path_pt.name,
+        "n_classes": N_CLASSES,
+        "device_treino": str(device),
+        "epochs_fc": epochs_fc,
+        "epochs_ft": epochs_ft,
+        "lr_fc": lr_fc,
+        "lr_ft": 1e-4,
+        "batch_size": batch,
+        "tempo_s": round(time.perf_counter() - t0, 2),
+        "val_accuracy": float(np.mean(np.array(y_true) == np.array(y_pred))),
+        "confusion_matrix_val": cm.tolist(),
+    }
+    path_train_meta.write_text(
+        json.dumps(train_extra, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    app_meta = {
         "classes": list(CLASSES_DERMA_MNIST),
         "image_shape": [28, 28],
-        "val_samples": len(x_val),
+        "val_samples": int(len(y_val)),
+        "weights_file": path_pt.name,
+        "backbone": "resnet18_imagenet_transfer",
     }
-    (MODELOS_DIR / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    print(f"[ex10] Modelo gravado em {modelo_path}", flush=True)
+    path_app_meta.write_text(
+        json.dumps(app_meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    print(f"\n[ex10] Modelo: {path_pt}", flush=True)
+    print(f"[ex10] Metadados treino: {path_train_meta}", flush=True)
+    print(f"[ex10] Metadados app: {path_app_meta}", flush=True)
+    print(f"Tempo total: {train_extra['tempo_s']}s", flush=True)
 
 
 if __name__ == "__main__":
@@ -519,13 +744,13 @@ def calcular_prioridade(
 # --- Célula 0 (markdown) ---
 # # Exercício 10 — Triagem de **imagens** (DermaMNIST) + **MongoDB** + agente
 # 
-# - **Dados:** subconjunto público **DermaMNIST** (MedMNIST; imagens 28×28 derivadas de conjuntos dermatoscópicos agregados — citar Yang et al., MedMNIST).
-# - **Classificador:** regressão logística sobre pixeis (treino rápido em CPU); grava `models/clf_derma.joblib`.
-# - **Prioridade:** heurística em `triagem.py` (patologia alvo configurável, predef.: **melanoma**, índice 4).
-# - **Persistência:** coleção `casos` na BD MongoDB `triagem`.
-# - **Agente:** `agent_triagem.py` (LangGraph ReAct) com ferramentas para processar amostras, listar fila e marcar atendido.
+# - **Dados:** **DermaMNIST** (MedMNIST; 28×28; citar Yang et al., MedMNIST).
+# - **Classificador:** **CNN ResNet18** com *transfer learning* (pesos ImageNet): backbone 28×28 → redimensiona para 224×224, 3 canais, normalização ImageNet; fase 1 treina só `fc`, fase 2 *fine-tune* de `layer4`. Grava `models/cnn_derma.pt` e `models/meta.json`. O script `treinar_classificador.py` é equivalente à célula de treino.
+# - **Prioridade:** heurística em `triagem.py` (patologia alvo configurável; predef.: **melanoma**, índice 4).
+# - **Persistência:** coleção `casos` no MongoDB `triagem`.
+# - **Agente:** nas células finais o grafo **LangGraph ReAct** está **montado aqui** (ferramentas com `@tool` + `create_react_agent`). O ficheiro `agent_triagem.py` serve ao **Streamlit** para não duplicar código na app.
 # 
-# **Arranque:** `./run.sh` (sobe Mongo + Jupyter). No contentor: `MONGODB_URI=mongodb://curso:curso@mongo:27017/triagem?authSource=admin`.
+# **Arranque:** `./run_jupyter.sh` (Mongo + Jupyter). No contentor: `MONGODB_URI=mongodb://curso:curso@mongo:27017/triagem?authSource=admin`.
 
 # --- Célula 1 (código) ---
 from __future__ import annotations
@@ -546,25 +771,243 @@ if str(_ex) not in sys.path:
     sys.path.insert(0, str(_ex))
 
 # --- Célula 2 (markdown) ---
-# ## 1. Treinar o classificador (primeira vez)
+# ## 1. Treinar a CNN (primeira vez)
+# 
+# Chama `treinar_classificador.main()`: DermaMNIST → treino em GPU/CPU → relatório no split `val` → `models/cnn_derma.pt` + `meta.json`.
+# 
+# Podes fazer o mesmo no terminal: `python treinar_classificador.py` (na pasta deste exercício). A **célula seguinte** ao treino mostra exemplos de imagens, classificações e a matriz de confusão no `val`.
 
 # --- Célula 3 (código) ---
-# Demora vários minutos na primeira execução (download DermaMNIST).
-# import treinar_classificador as tr
-# tr.main()
+import importlib
 
-# --- Célula 4 (markdown) ---
+import treinar_classificador as tc
+
+importlib.reload(tc)  # útil se editaste o ficheiro .py no disco
+tc.main()
+
+# --- Célula 4 (código) ---
+# Exemplos de classificação (val) + matriz de confusão
+from __future__ import annotations
+
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import ConfusionMatrixDisplay, classification_report
+
+from classificador import prever_de_vector
+from treinar_classificador import carregar_xy
+from triagem import CLASSES_DERMA_MNIST
+
+x_val, y_val = carregar_xy("val")
+rng = np.random.default_rng(42)
+idxs = rng.choice(len(y_val), size=16, replace=False)
+
+fig, axes = plt.subplots(4, 4, figsize=(11, 11))
+for ax, i in zip(axes.flat, idxs):
+    x = x_val[i]
+    r = prever_de_vector(x)
+    ax.imshow(x.reshape(28, 28), cmap="gray", vmin=0, vmax=1)
+    verd = CLASSES_DERMA_MNIST[int(y_val[i])]
+    pred = r["rotulo_predito"]
+    ax.set_title(
+        f"V: {verd[:22]}…\nP: {pred[:22]}…\n{r['confianca_maxima']:.2f}",
+        fontsize=7,
+    )
+    ax.axis("off")
+plt.suptitle("DermaMNIST val — verdadeiro (V) vs predito (P)", fontsize=12)
+plt.tight_layout()
+plt.show()
+
+print("Relatório no conjunto val (todas as amostras):")
+y_pred = np.array([prever_de_vector(x_val[i])["classe_predita"] for i in range(len(x_val))])
+print(
+    classification_report(
+        y_val, y_pred, target_names=list(CLASSES_DERMA_MNIST), digits=3, zero_division=0
+    )
+)
+
+fig2, ax2 = plt.subplots(figsize=(8, 7))
+labels_curto = [c.replace("_", " ")[:12] for c in CLASSES_DERMA_MNIST]
+ConfusionMatrixDisplay.from_predictions(
+    y_val,
+    y_pred,
+    display_labels=labels_curto,
+    ax=ax2,
+    xticks_rotation=45,
+    colorbar=True,
+)
+ax2.set_title("Matriz de confusão — split val")
+plt.tight_layout()
+plt.show()
+
+# --- Célula 5 (markdown) ---
 # ## 2. Processar uma amostra e gravar no MongoDB
+# 
+# Sem importar o agente: **ler** a imagem, **classificar**, **prioridade**, **`inserir_caso`** (ver `mongo_store.py`).
 
-# --- Célula 5 (código) ---
-from agent_triagem import processar_amostra_derma
+# --- Célula 6 (código) ---
+from classificador import prever_de_vector, vetor_de_amostra_medmnist
+from mongo_store import inserir_caso
+from triagem import CLASSES_DERMA_MNIST, calcular_prioridade
 
-print(processar_amostra_derma.invoke({"split": "val", "indice": 0}))
+split = "val"
+indice = 0
 
-# --- Célula 6 (markdown) ---
-# ## 3. Consultar fila e agente (linguagem natural)
+x, rotulo_verdadeiro = vetor_de_amostra_medmnist(split, indice)
+resultado = prever_de_vector(x)
+prioridade = calcular_prioridade(resultado["probabilidades"], resultado["classe_predita"])
+caso_id = f"dmnist_{split}_{indice}"
 
-# --- Célula 7 (código) ---
-from agent_triagem import convidar_triagem
+inserir_caso(
+    caso_id=caso_id,
+    origem="dermamnist",
+    indice_amostra=indice,
+    split=split,
+    rotulo_verdadeiro=int(rotulo_verdadeiro),
+    resultado_classificador=resultado,
+    prioridade=prioridade,
+)
 
-print(convidar_triagem("Lista os 5 casos pendentes com maior prioridade e resume em bullets."))
+nome_verdade = (
+    CLASSES_DERMA_MNIST[rotulo_verdadeiro]
+    if 0 <= rotulo_verdadeiro < len(CLASSES_DERMA_MNIST)
+    else str(rotulo_verdadeiro)
+)
+print(
+    f"Caso `{caso_id}` gravado.\n"
+    f"  Predito: {resultado['rotulo_predito']} (conf. máx. {resultado['confianca_maxima']:.3f})\n"
+    f"  Rótulo do dataset: {nome_verdade}\n"
+    f"  Prioridade (0–100): {prioridade}"
+)
+
+# --- Célula 7 (markdown) ---
+# ## 3. Agente ReAct (LangGraph) **nesta célula**
+# 
+# Define-se cada **`@tool`**, o LLM (Gemini com *fallback*) e **`create_react_agent`**. O ficheiro `agent_triagem.py` repete esta API para o Streamlit.
+
+# --- Célula 8 (código) ---
+import os
+
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+from classificador import prever_de_vector, vetor_de_amostra_medmnist
+from lib_llm_fallback import gemini_model_candidates, make_gemini_chat_with_runtime_fallback
+from mongo_store import (
+    contar_pendentes,
+    inserir_caso,
+    listar_top_prioridade,
+    marcar_atendido,
+    obter_caso,
+)
+from triagem import CLASSES_DERMA_MNIST, calcular_prioridade, nome_patologia_prioritaria
+
+
+def _garantir_chave_gemini() -> None:
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY.")
+
+
+@tool
+def processar_amostra_derma(split: str, indice: int) -> str:
+    """Extrai imagem DermaMNIST, classifica, prioridade, grava MongoDB."""
+    split = split.strip().lower()
+    if split not in ("train", "val", "test"):
+        return "Erro: `split` deve ser train, val ou test."
+    try:
+        x, y_verd = vetor_de_amostra_medmnist(split, int(indice))
+    except Exception as e:
+        return f"Erro ao ler amostra: {e}"
+    res = prever_de_vector(x)
+    prio = calcular_prioridade(res["probabilidades"], res["classe_predita"])
+    cid = f"dmnist_{split}_{int(indice)}"
+    inserir_caso(
+        caso_id=cid,
+        origem="dermamnist",
+        indice_amostra=int(indice),
+        split=split,
+        rotulo_verdadeiro=int(y_verd),
+        resultado_classificador=res,
+        prioridade=prio,
+    )
+    rotulo_v = CLASSES_DERMA_MNIST[y_verd] if 0 <= y_verd < len(CLASSES_DERMA_MNIST) else str(y_verd)
+    return (
+        f"Caso `{cid}` gravado. Predito: {res['rotulo_predito']} (conf. {res['confianca_maxima']:.3f}). "
+        f"Dataset: {rotulo_v}. Prioridade {prio}/100."
+    )
+
+
+@tool
+def consultar_fila_prioridade(limite: int = 8) -> str:
+    """Lista pendentes por prioridade (máx. 25)."""
+    rows = listar_top_prioridade(max(1, min(25, int(limite))))
+    if not rows:
+        return "Não há casos pendentes na fila."
+    linhas = []
+    for i, r in enumerate(rows, 1):
+        linhas.append(
+            f"{i}. {r.get('caso_id')} — prioridade {r.get('prioridade')} — "
+            f"pred: {r.get('rotulo_predito')} — conf {r.get('confianca_maxima', 0):.3f}"
+        )
+    return "\n".join(linhas)
+
+
+@tool
+def detalhe_caso(caso_id: str) -> str:
+    doc = obter_caso(caso_id.strip())
+    if not doc:
+        return f"Caso `{caso_id}` não encontrado."
+    prob = list(doc.get("probabilidades") or [])
+    slim = {k: v for k, v in doc.items() if k not in ("_id", "probabilidades")}
+    return f"{slim}\nprob. (3 primeiras): {prob[:3]}"
+
+
+@tool
+def finalizar_atendimento(caso_id: str) -> str:
+    ok = marcar_atendido(caso_id.strip())
+    return "Marcado atendido." if ok else f"Sem alterações para `{caso_id}`."
+
+
+@tool
+def contagem_fila_pendente() -> str:
+    n = contar_pendentes()
+    alvo = nome_patologia_prioritaria()
+    return f"Pendentes: {n}. Patologia com peso extra: {alvo}."
+
+
+def construir_grafo_triagem_notebook():
+    _garantir_chave_gemini()
+    prim = (
+        os.environ.get("GEMINI_MODEL_EX10") or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash"
+    ).strip()
+    candidatos = gemini_model_candidates(primary=prim)
+    llm = make_gemini_chat_with_runtime_fallback(candidatos, temperature=0.15)
+    return create_react_agent(
+        llm,
+        tools=[
+            processar_amostra_derma,
+            consultar_fila_prioridade,
+            detalhe_caso,
+            finalizar_atendimento,
+            contagem_fila_pendente,
+        ],
+        checkpointer=MemorySaver(),
+    )
+
+
+grafo = construir_grafo_triagem_notebook()
+saida = grafo.invoke(
+    {
+        "messages": [
+            HumanMessage(
+                content="Lista os 5 casos pendentes com maior prioridade e resume em bullets."
+            )
+        ]
+    },
+    config={"configurable": {"thread_id": "notebook-ex10-demo"}},
+)
+ultimas = saida.get("messages") or []
+final_msg = ultimas[-1]
+conteudo = getattr(final_msg, "content", None)
+print(conteudo if isinstance(conteudo, str) else str(final_msg))

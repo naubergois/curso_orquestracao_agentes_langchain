@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: exercicio_04_fewshot_marketing
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../../.env
+    environment:
+      GEMINI_MODEL_EX04: ${GEMINI_MODEL_EX04:-}
+    volumes:
+      - .:/app

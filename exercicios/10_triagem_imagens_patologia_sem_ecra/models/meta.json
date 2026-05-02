@@ -1,0 +1,15 @@
+{
+  "classes": [
+    "actinic_keratoses_and_intraepithelial_carcinoma",
+    "basal_cell_carcinoma",
+    "benign_keratosis_like_lesions",
+    "dermatofibroma",
+    "melanoma",
+    "melanocytic_nevi",
+    "vascular_lesions"
+  ],
+  "image_shape": [28, 28],
+  "val_samples": 1003,
+  "weights_file": "cnn_derma.pt",
+  "backbone": "resnet18_imagenet_transfer"
+}

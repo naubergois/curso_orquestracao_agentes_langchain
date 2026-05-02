@@ -1,0 +1,8 @@
+# Jupyter — PDFs de exemplo, extração de texto e *chunking* (sem LLM obrigatório)
+python-dotenv>=1.0.0,<2
+numpy>=1.26.0,<3
+pandas>=2.1.0,<3
+pypdf>=4.0.0,<6
+reportlab>=4.0.0,<5
+langchain-core>=0.3.0
+langchain-text-splitters>=0.3.0

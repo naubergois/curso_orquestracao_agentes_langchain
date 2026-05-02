@@ -942,6 +942,8 @@ def construir_cadeia_rag_hibrido(
 # 
 # **RAG híbrido:** dados **estruturados** (processos fictícios em **PostgreSQL**, tabela `processos` + vínculos `processo_anexos_pdf` aos nomes dos PDFs) são **fundidos no prompt** com o **texto não estruturado** recuperado do Chroma. O `docker-compose.jupyter.yml` inclui o serviço `db` e define `DATABASE_URL`.
 # 
+# **Nota pedagógica:** nas células de RAG e de SQL o encadeamento está **explícito** (LCEL, `psycopg2`, formatação) em vez de depender de `from rag_juridico import …` ou `from db_processos import …`. Módulos como `ingest_rag` concentram só o que seria repetitivo (vários embeddings, `Chroma.from_documents`).
+# 
 # **Variáveis:** `GOOGLE_API_KEY`; opcional `GEMINI_MODEL_EX09`, `GEMINI_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL_ALT`, `FASTEMBED_MODEL`, `DATABASE_URL` / `EX09_POSTGRES_PORT` (fora do Docker). Sem chave Google, tende a funcionar **só** a coleção FastEmbed local; chat e agente PDF precisam da chave.
 # 
 # **Arranque Docker:** `./run_jupyter.sh` nesta pasta (Postgres na porta **5434** por defeito no host).

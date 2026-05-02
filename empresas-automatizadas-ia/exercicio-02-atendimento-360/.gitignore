@@ -1,0 +1,7 @@
+.env
+__pycache__/
+.venv/
+venv/
+notebooks/.ipynb_checkpoints/
+app/data/generated/*
+!app/data/generated/.gitkeep

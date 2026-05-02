@@ -1,4 +1,4 @@
-"""Carrega o classificador treinado e produz probabilidades sobre imagens DermaMNIST (28×28)."""
+"""Carrega a CNN treinada e produz probabilidades sobre imagens DermaMNIST (28×28)."""
 
 from __future__ import annotations
 
@@ -6,12 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-import joblib
 import numpy as np
+import torch
+
+from cnn_derma import construir_resnet18_transfer, preprocess_flat_para_resnet
 
 MODELOS_DIR = Path(__file__).resolve().parent / "models"
-_MODELO: Any | None = None
+_MODELO: torch.nn.Module | None = None
 _META: dict | None = None
+_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _meta() -> dict:
@@ -22,24 +25,33 @@ def _meta() -> dict:
     return _META
 
 
-def carregar_classificador(force_reload: bool = False) -> Any:
+def carregar_classificador(force_reload: bool = False) -> torch.nn.Module:
     global _MODELO
     if _MODELO is not None and not force_reload:
         return _MODELO
-    path = MODELOS_DIR / "clf_derma.joblib"
+
+    path_name = _meta().get("weights_file", "cnn_derma.pt")
+    path = MODELOS_DIR / str(path_name)
     if not path.is_file():
         raise FileNotFoundError(
             f"Modelo em falta: {path}. Corra `python treinar_classificador.py` nesta pasta."
         )
-    _MODELO = joblib.load(path)
+    m = construir_resnet18_transfer(7)
+    state = torch.load(path, map_location=_DEVICE)
+    m.load_state_dict(state)
+    m.eval().to(_DEVICE)
+    _MODELO = m
     return _MODELO
 
 
 def prever_de_vector(imagem_flat_normalizada: np.ndarray) -> dict[str, Any]:
     """`imagem_flat_normalizada`: (784,) floats em [0,1]."""
-    clf = carregar_classificador()
-    x = np.asarray(imagem_flat_normalizada, dtype=np.float32).reshape(1, -1)
-    proba = clf.predict_proba(x)[0]
+    modelo = carregar_classificador()
+    with torch.no_grad():
+        tin = preprocess_flat_para_resnet(imagem_flat_normalizada, _DEVICE)
+        logits = modelo(tin)
+        proba = torch.softmax(logits, dim=1)[0].cpu().numpy()
+
     pred = int(np.argmax(proba))
     classes = _meta().get("classes") or []
     return {

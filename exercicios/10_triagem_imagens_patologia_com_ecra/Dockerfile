@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY lib_llm_fallback.py .
 COPY 10_triagem_imagens_patologia_sem_ecra/agent_triagem.py \
      10_triagem_imagens_patologia_sem_ecra/classificador.py \
+     10_triagem_imagens_patologia_sem_ecra/cnn_derma.py \
      10_triagem_imagens_patologia_sem_ecra/mongo_store.py \
      10_triagem_imagens_patologia_sem_ecra/triagem.py \
      10_triagem_imagens_patologia_sem_ecra/treinar_classificador.py \

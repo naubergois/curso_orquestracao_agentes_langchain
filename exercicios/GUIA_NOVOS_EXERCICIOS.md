@@ -1,6 +1,6 @@
 # Guia: novos exercícios, Docker e padrões de qualidade
 
-Este documento serve para **pessoas** e para **agentes / IDEs com IA** que criem ou alterem exercícios no repositório. Segue a estrutura **já adoptada** em `exercicios/` (ex.: `00_alo_mundo`, `01_…_com_ecra`, `01_…_sem_ecra`, `03_calculadora`, `03_calculadora_sem_ecra`, `05_prompt_templates_lcel_sem_ecra`, `06_memoria_langchain_sem_ecra`, `07_precos_clima_cotacao`, `07_precos_clima_cotacao_sem_ecra`, `08_chains_complexas_sem_ecra`, `09_rag_juridico_*`, `10_triagem_imagens_patologia_*`).
+Este documento serve para **pessoas** e para **agentes / IDEs com IA** que criem ou alterem exercícios no repositório. Segue a estrutura **já adoptada** em `exercicios/` (ex.: `00_alo_mundo`, `01_…_com_ecra`, `01_…_sem_ecra`, `03_calculadora`, `03_calculadora_sem_ecra`, `05_prompt_templates_lcel_sem_ecra`, `06_memoria_langchain_sem_ecra`, `07_precos_clima_cotacao`, `07_precos_clima_cotacao_sem_ecra`, `08_chains_complexas_sem_ecra`, `09_rag_juridico_*`, `10_triagem_imagens_patologia_*`, `12_pdf_chunks_split_sem_ecra`, `13_agente_pdf_sem_ecra`).
 
 ---
 
@@ -37,6 +37,7 @@ Copiar uma pasta existente **análoga** (ex.: `03_calculadora` para novo Streaml
 - **`GEMINI_MODEL_EX08`** — opcional no exercício 08 (cadeias LCEL compostas); se vazio, usa-se `GEMINI_MODEL`.
 - **`GEMINI_MODEL_EX09`** — opcional no exercício 09 (RAG jurídico / Chroma); se vazio, usa-se `GEMINI_MODEL`.
 - **`GEMINI_MODEL_EX10`** — opcional no exercício 10 (triagem de imagens + MongoDB); se vazio, usa-se `GEMINI_MODEL`.
+- **`GEMINI_MODEL_EX13`** — opcional no exercício 13 (agente sobre PDFs chunkados); se vazio, usa-se `GEMINI_MODEL`.
 - Novo exercício com modelo **dedicado**: definir nome claro (`GEMINI_MODEL_EXNN` ou prefixo do tema) e **documentar em `.env.example`** com comentário e caminho da pasta.
 - Opcionais partilhados: `GEMINI_RETRY_ATTEMPTS`, `GEMINI_RETRY_DELAY_SEC`.
 
@@ -103,6 +104,7 @@ Cada pasta de exercício `exercicios/NN_*` (regex: `^\d\d_.+`) deve incluir **`C
 | Geração | Ficheiro **gerado** — não editar à mão. Na **raiz do repositório:** `python exercicios/gerar_codigo_completo_txt.py` |
 | O que fica de fora | Scripts `run_*`, Dockerfiles, composes e ficheiros em subpastas (ex.: `.ipynb_checkpoints`) não entram no export. |
 | Novos exercícios | Após criar ou alterar `.py` / `.ipynb` ou `requirements.txt` do exercício, voltar a correr o comando e **commitar** o `CODIGO_COMPLETO.txt` actualizado junto com as alterações. |
+| Pasta extra | `rag_auditoria_rostos_sem_ecra` (lista `EXTRA_CODIGO_COMPLETO_DIRS` em `gerar_codigo_completo_txt.py`) gera também **`CODIGO_COMPLETO.md`** junto do `.txt`. |
 
 ---
 

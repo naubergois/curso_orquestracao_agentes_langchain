@@ -1,0 +1,537 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 11_pydantic_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+pydantic>=2.7.0,<3
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+
+
+================================================================================
+# FICHEIRO: exercicio_03_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 03 — EduPrompt Academy
+# 
+# **Versão didática:** todo o código LangChain/LCEL está **neste notebook** (sem importar `app.chains`). Assim consegues ler de cima a baixo: templates → chains → paralelo → exemplo.
+# 
+# > A pasta `app/` mantém uma cópia modular para **Docker/FastAPI** opcional; o enunciado «sem ecrã» cumpre-se aqui no Jupyter.
+# 
+# **Empresa simulada:** a EduPrompt Academy vende trilhas educacionais com IA. **Problema:** professores precisam de **explicações**, **exercícios** e **resumos** em pouco tempo.
+# 
+# **Frameworks:** LangChain (`langchain_core`), **LCEL** (`|` e `RunnableParallel`), Gemini via `langchain-google-genai`, Docker (ver `README.md`).
+
+# --- Célula 1 (markdown) ---
+# ## Conceitos antes do código
+# 
+# ### Arquitetura pedida pelo enunciado
+# 
+# ```text
+# Tema informado (tema, nivel)
+#   → PromptTemplate (aqui: ChatPromptTemplate para modelo de chat)
+#   → Modelo LLM
+#   → Parser
+#   → Resposta educacional
+# ```
+# 
+# ### Por que `ChatPromptTemplate` e não só «PromptTemplate»?
+# 
+# Modelos **de chat** (Gemini, GPT-4, etc.) consomem **mensagens** com papéis (`system`, `human`, `ai`). O objeto adequado no LangChain é o **`ChatPromptTemplate`**: defines o «guião» dessas mensagens com variáveis `{tema}` e `{nivel}`. O `PromptTemplate` clássico é mais usado quando se envia **uma única string** a um modelo tipo *completion*.
+# 
+# ### LCEL — LangChain Expression Language
+# 
+# - O operador **`|`** liga **Runnable** em sequência: saída de um passo é entrada do seguinte.
+# - Exemplo mental: `A | B | C` é «primeiro corre `A`, depois `B`, depois `C`».
+# - **`StrOutputParser()`** no fim converte a resposta do chat numa **`str`** Python simples — ideal para juntar Markdown ou gravar ficheiros.
+# 
+# ### `RunnableParallel`
+# 
+# Quando várias chains precisam **das mesmas variáveis** (`tema`, `nivel`) mas produzem **saídas diferentes**, podes agrupá-las: um único `.invoke({...})` devolve um dicionário com uma chave por chain (ex.: `explicacao`, `exercicios`, `resumo`). Isto é composição LCEL — não é obrigatório que o modelo execute fisicamente em paralelo; é uma **abstração** limpa para fluxos paralelos ou independentes.
+
+# --- Célula 2 (markdown) ---
+# ## 0. Ambiente e caminhos
+# 
+# Carregamos `.env` na raiz do repositório do curso (onde deve estar `GOOGLE_API_KEY` para o Gemini).
+
+# --- Célula 3 (código) ---
+from pathlib import Path
+import os
+
+from dotenv import load_dotenv
+
+EX_ROOT = Path.cwd().resolve()
+REPO_ROOT = EX_ROOT.parent.parent
+
+load_dotenv(REPO_ROOT / ".env", override=False)
+load_dotenv(EX_ROOT / ".env", override=True)
+
+if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+    raise RuntimeError("Defina GOOGLE_API_KEY no .env na raiz do repositório.")
+
+print("OK — Repo:", REPO_ROOT)
+print("OK — Exercício:", EX_ROOT)
+
+# --- Célula 4 (markdown) ---
+# ## 1. Imports LangChain e instância do modelo
+# 
+# Importamos **apenas bibliotecas externas** — nada da pasta `app` do projeto.
+# 
+# - **`ChatGoogleGenerativeAI`**: cliente do Gemini compatível com LCEL.
+# - **`temperature` baixa** (0,25): respostas mais estáveis para material pedagógico.
+
+# --- Célula 5 (código) ---
+import json
+
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableParallel
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+_model_name = (os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").replace("models/", "")
+
+llm = ChatGoogleGenerativeAI(model=_model_name, temperature=0.25)
+print("Modelo:", _model_name)
+
+# --- Célula 6 (markdown) ---
+# ## 2. Três templates de prompt (`ChatPromptTemplate`)
+# 
+# Cada template declara **variáveis** `tema` e `nivel`. No `.invoke({"tema": "RAG", "nivel": "iniciante"})` esses espaços são preenchidos.
+# 
+# | Chain | Função pedagógica |
+# |-------|-------------------|
+# | **Explicação** | Texto contínuo, 2–4 parágrafos; sem `##` no corpo (o notebook acrescenta cabeçalhos depois). |
+# | **Exercícios** | Exatamente **três** itens numerados `1.` … `3.` |
+# | **Resumo** | 4–6 bullets com `- ` |
+# 
+# A mensagem **`system`** fixa o papel (EduPrompt Academy, português europeu). A **`human`** traz as instruções específicas por tarefa.
+
+# --- Célula 7 (código) ---
+PROMPT_EXPLICACAO = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És o EduPrompt Academy. Escreve em português europeu, tom professoral e claro. "
+            "Adaptas vocabulário e profundidade ao nível pedido (iniciante, intermédio ou avançado).",
+        ),
+        (
+            "human",
+            "Explica o tema «{tema}» para um público de nível «{nivel}».\n"
+            "Usa 2–4 parágrafos curtos. Começa por contextualizar o tema numa frase.\n"
+            "Não uses cabeçalhos Markdown (##) no texto; só parágrafos e listas curtas se ajudarem.",
+        ),
+    ]
+)
+
+PROMPT_EXERCICIOS = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És o EduPrompt Academy. Crias exercícios objetivos em português europeu.",
+        ),
+        (
+            "human",
+            "Cria **três** exercícios sobre «{tema}», adequados ao nível «{nivel}».\n"
+            "Numera exatamente assim: `1.`, `2.`, `3.` — uma linha ou parágrafo curto por exercício.\n"
+            "Sem cabeçalhos Markdown.",
+        ),
+    ]
+)
+
+PROMPT_RESUMO = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "És o EduPrompt Academy. Resumes com rigor em português europeu.",
+        ),
+        (
+            "human",
+            "Resume «{tema}» para nível «{nivel}» em 4 a 6 bullet points.\n"
+            "Cada linha começa por `- `. Sem cabeçalhos Markdown.",
+        ),
+    ]
+)
+
+# --- Célula 8 (markdown) ---
+# ## 3. Três chains LCEL: `template | llm | StrOutputParser()`
+# 
+# O operador **`|`** constrói um **`RunnableSequence`**:
+# 
+# 1. O template transforma `{"tema", "nivel"}` numa lista de mensagens para o modelo.
+# 2. O `llm` gera a resposta.
+# 3. O **`StrOutputParser`** extrai só o texto.
+# 
+# Cada função abaixo devolve uma **chain reutilizável** — podes guardá-la numa variável e chamar `.invoke(...)` várias vezes com temas diferentes.
+
+# --- Célula 9 (código) ---
+def chain_explicacao():
+    return PROMPT_EXPLICACAO | llm | StrOutputParser()
+
+
+def chain_exercicios():
+    return PROMPT_EXERCICIOS | llm | StrOutputParser()
+
+
+def chain_resumo():
+    return PROMPT_RESUMO | llm | StrOutputParser()
+
+# --- Célula 10 (markdown) ---
+# ## 4. Modo sequencial (três chamadas ao modelo)
+# 
+# Útil para perceber **custo/latência**: cada `.invoke` é uma ida ao Gemini. Comparando com a secção seguinte, vês quando faz sentido agrupar logicamente em paralelo.
+
+# --- Célula 11 (código) ---
+entrada = {"tema": "RAG", "nivel": "iniciante"}
+print("Entrada:", json.dumps(entrada, ensure_ascii=False, indent=2))
+
+texto_exp = chain_explicacao().invoke(entrada)
+texto_exe = chain_exercicios().invoke(entrada)
+texto_res = chain_resumo().invoke(entrada)
+
+print("\n[Sequencial] primeiros 300 chars da explicação:\n", texto_exp[:300], "…")
+
+# --- Célula 12 (markdown) ---
+# ## 5. `RunnableParallel` — uma invocação, três saídas
+# 
+# `RunnableParallel` recebe **chains nomeadas**. O mesmo dicionário `entrada` é passado a cada uma. O resultado é um **dict** Python:
+# 
+# ```python
+# {"explicacao": "...", "exercicios": "...", "resumo": "..."}
+# ```
+# 
+# Depois juntamos as partes no formato do enunciado: cabeçalhos `## Explicação`, `## Exercícios`, `## Resumo`.
+
+# --- Célula 13 (código) ---
+def parallel_educacional():
+    return RunnableParallel(
+        explicacao=chain_explicacao(),
+        exercicios=chain_exercicios(),
+        resumo=chain_resumo(),
+    )
+
+
+def montar_markdown_pacote(partes: dict) -> str:
+    return (
+        "## Explicação\n\n"
+        f"{partes['explicacao'].strip()}\n\n"
+        "## Exercícios\n\n"
+        f"{partes['exercicios'].strip()}\n\n"
+        "## Resumo\n\n"
+        f"{partes['resumo'].strip()}"
+    )
+
+
+def gerar_pacote_educacional(vars_: dict, *, paralelo: bool = True) -> dict:
+    if paralelo:
+        out = parallel_educacional().invoke(vars_)
+    else:
+        out = {
+            "explicacao": chain_explicacao().invoke(vars_),
+            "exercicios": chain_exercicios().invoke(vars_),
+            "resumo": chain_resumo().invoke(vars_),
+        }
+    return {**out, "markdown": montar_markdown_pacote(out)}
+
+
+par_out = parallel_educacional().invoke(entrada)
+print("Chaves devolvidas pelo RunnableParallel:", list(par_out.keys()))
+
+pacote = gerar_pacote_educacional(entrada, paralelo=True)
+print("\n--- Markdown consolidado (exemplo de saída pedido no enunciado) ---\n")
+print(pacote["markdown"])
+
+# --- Célula 14 (markdown) ---
+# ## 6. Desafio extra — quarta chain (narrativa sarcástica nerd)
+# 
+# Mesmo padrão LCEL: novo template + mesmo `llm` + `StrOutputParser`. Tom **irónico leve**, sem ataques a pessoas reais — só caricatura de dinâmicas Produto vs Engenharia.
+
+# --- Célula 15 (código) ---
+PROMPT_NARRATIVA_NERD = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Humor nerd e sarcástico **leve**; não insultes grupos nem pessoas. Mantém correção técnica.",
+        ),
+        (
+            "human",
+            "Escreve **um único parágrafo** (até ~120 palavras) sobre «{tema}», "
+            "como se fossem duas equipas (Produto vs Engenharia) a «lutar» pelo mesmo buzzword, "
+            "para um leitor «{nivel}». Tom ironico corporativo de TI.",
+        ),
+    ]
+)
+
+
+def chain_narrativa_nerd():
+    return PROMPT_NARRATIVA_NERD | llm | StrOutputParser()
+
+
+print(chain_narrativa_nerd().invoke(entrada))
+
+# --- Célula 16 (markdown) ---
+# ## Referências fora do notebook
+# 
+# - [`docs/chains.md`](docs/chains.md) — descrição textual de cada chain (espelha o que implementaste acima).
+# - [`docs/explicacao_teorica.md`](docs/explicacao_teorica.md), [`docs/arquitetura.md`](docs/arquitetura.md).
+# - [`app/chains/eduprompt_chains.py`](app/chains/eduprompt_chains.py) — **mesma lógica** packaging para `app/main.py` / Docker API opcional; não é necessário para correr este notebook.
+
+# --- Célula 17 (código) ---
+
+================================================================================
+# FICHEIRO: exercicio_11_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 11 — Pydantic (validação e dados estruturados)
+# 
+# **Objetivo:** dominar **Pydantic v2** para dados tipados em pipelines de IA — desde APIs até saídas estruturadas de LLMs.
+# 
+# **Deste notebook:** modelos base, `Field`, `field_validator`, `model_validator`, modelos aninhados, serialização JSON, **JSON Schema** e (opcional) **`with_structured_output`** com Gemini.
+# 
+# **Documentação:** pasta [`docs/`](docs/).
+
+# --- Célula 1 (markdown) ---
+# ## 0. Ambiente
+# 
+# A maior parte das células **não precisa de rede**. A última secção usa Gemini — define `GOOGLE_API_KEY` no `.env` na **raiz do repositório**.
+
+# --- Célula 2 (código) ---
+from pathlib import Path
+import os
+
+from dotenv import load_dotenv
+
+EX_ROOT = Path.cwd().resolve()
+REPO_ROOT = EX_ROOT.parent.parent
+
+load_dotenv(REPO_ROOT / ".env", override=False)
+load_dotenv(EX_ROOT / ".env", override=True)
+
+print("OK — exercício:", EX_ROOT)
+
+# --- Célula 3 (markdown) ---
+# ## 1. `BaseModel` e `Field`
+# 
+# Um modelo declara **campos com tipos**. O Pydantic **coage** valores (ex.: `"42"` → `int`) quando faz sentido e rejeita o resto com `ValidationError`.
+# 
+# - `Field(..., description=...)` documenta o campo (aparece no JSON Schema — útil para LLMs).
+# - Restrições numéricas: `ge`, `le`, `gt`, etc.
+
+# --- Célula 4 (código) ---
+from pydantic import BaseModel, Field, ValidationError
+
+
+class FichaPedagogica(BaseModel):
+    """Exemplo fictício — curso interno (sem dados reais de saúde)."""
+
+    codigo_aluno: str = Field(min_length=3, description="Identificador interno")
+    horas_estudo_semana: int = Field(ge=0, le=60, description="Horas declaradas pelo formador")
+    nota_quiz: float = Field(ge=0.0, le=20.0)
+
+
+a = FichaPedagogica(codigo_aluno="AL-901", horas_estudo_semana=8, nota_quiz=15.5)
+print(a)
+
+try:
+    FichaPedagogica(codigo_aluno="AB", horas_estudo_semana=8, nota_quiz=15.5)
+except ValidationError as e:
+    print("Erro esperado (codigo curto):", e.error_count(), "falhas")
+
+# --- Célula 5 (markdown) ---
+# ## 2. `field_validator` — normalizar um campo
+# 
+# `mode='before'` corre **antes** da coerção de tipo (útil para limpar strings). `mode='after'` corre já com o tipo convertido.
+
+# --- Célula 6 (código) ---
+from typing import Literal
+
+from pydantic import field_validator
+
+
+class InscricaoCurso(BaseModel):
+    email_contacto: str
+    nivel: Literal["iniciante", "intermediario", "avancado"]
+
+    @field_validator("email_contacto", mode="before")
+    @classmethod
+    def strip_email(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+
+i = InscricaoCurso(email_contacto="  Ana.Exemplo@Escola.PT  ", nivel="iniciante")
+print(i.email_contacto)
+
+# --- Célula 7 (markdown) ---
+# ## 3. `model_validator` — regras entre campos
+# 
+# Útil quando uma restrição depende de **dois ou mais** atributos (ex.: desconto não pode exceder o preço base).
+
+# --- Célula 8 (código) ---
+from pydantic import model_validator
+
+
+class OrcamentoTrilha(BaseModel):
+    preco_base_eur: float = Field(ge=0)
+    desconto_eur: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def desconto_coerente(self) -> "OrcamentoTrilha":
+        if self.desconto_eur > self.preco_base_eur:
+            raise ValueError("desconto_eur não pode ser superior a preco_base_eur")
+        return self
+
+
+o = OrcamentoTrilha(preco_base_eur=100.0, desconto_eur=25.0)
+print("Total líquido:", o.preco_base_eur - o.desconto_eur)
+
+try:
+    OrcamentoTrilha(preco_base_eur=10.0, desconto_eur=50.0)
+except ValidationError as e:
+    print("Erro esperado:", e.errors()[0]["msg"])
+
+# --- Célula 9 (markdown) ---
+# ## 4. Modelos aninhados e coleções
+# 
+# Compõe tipos complexos: uma **encomenda** contém várias **linhas**, cada uma com quantidade e preço unitário.
+
+# --- Célula 10 (código) ---
+class LinhaPedido(BaseModel):
+    sku: str
+    quantidade: int = Field(ge=1)
+    preco_unitario_eur: float = Field(ge=0)
+
+    @property
+    def subtotal(self) -> float:
+        return self.quantidade * self.preco_unitario_eur
+
+
+class PedidoMaterial(BaseModel):
+    referencia: str
+    linhas: list[LinhaPedido]
+
+    @property
+    def total_eur(self) -> float:
+        return sum(l.subtotal for l in self.linhas)
+
+
+pedido = PedidoMaterial(
+    referencia="PED-2026-0042",
+    linhas=[
+        LinhaPedido(sku="LIVRO-RAG", quantidade=2, preco_unitario_eur=29.9),
+        LinhaPedido(sku="USB-C", quantidade=1, preco_unitario_eur=12.0),
+    ],
+)
+print("Total:", round(pedido.total_eur, 2), "EUR")
+
+# --- Célula 11 (markdown) ---
+# ## 5. Serialização: `model_dump`, `model_dump_json`, `model_validate_json`
+# 
+# - **`model_dump()`** — dicionário Python (pronto para `json.dumps` ou gravar em BD).
+# - **`model_dump_json()`** — string JSON.
+# - **`model_validate_json`** — reconstrói o modelo a partir de JSON (valida de novo).
+
+# --- Célula 12 (código) ---
+d = pedido.model_dump()
+print("dict keys:", list(d.keys()))
+
+js = pedido.model_dump_json(indent=2)
+print(js[:200], "…")
+
+copia = PedidoMaterial.model_validate_json(js)
+assert copia.total_eur == pedido.total_eur
+
+# --- Célula 13 (markdown) ---
+# ## 6. `ConfigDict` — comportamento do modelo
+# 
+# Exemplos comuns:
+# 
+# - `str_strip_whitespace=True` — remove espaços em strings ao validar.
+# - `extra="forbid"` — rejeita campos não declarados (útil contra payloads «a mais»).
+# - `frozen=True` — instância imutável (hashable se todos os campos forem hashable).
+
+# --- Célula 14 (código) ---
+from pydantic import ConfigDict
+
+
+class TagMetadados(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    tema: str
+    autor: str
+
+
+t = TagMetadados(tema="  embeddings  ", autor="Equipa Curso")
+print(t)
+
+try:
+    TagMetadados(tema="x", autor="y", campo_extra=1)
+except ValidationError as e:
+    print("extra forbid:", e.errors()[0]["type"])
+
+# --- Célula 15 (markdown) ---
+# ## 7. JSON Schema (`model_json_schema`)
+# 
+# O schema descreve tipos e restrições num formato standard — ferramentas, OpenAPI e **structured output** de LLMs podem consumi-lo.
+
+# --- Célula 16 (código) ---
+schema = PedidoMaterial.model_json_schema()
+print("title:", schema.get("title"))
+print("properties:", list(schema.get("properties", {}).keys()))
+
+# --- Célula 17 (markdown) ---
+# ## 8. Opcional — LangChain + Gemini com o **mesmo** modelo Pydantic
+# 
+# `ChatGoogleGenerativeAI.with_structured_output(MinhaClasse)` pede ao modelo uma resposta que **instancia** o schema. Útil para extrair campos de texto livre.
+# 
+# Se não tiveres API key, ignora a execução ou comenta a célula.
+
+# --- Célula 18 (código) ---
+from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+
+class SumarioNoticia(BaseModel):
+    """Schema para extracção simples — texto fictício."""
+
+    titulo_curto: str = Field(description="Título com até 80 caracteres")
+    entidades: list[str] = Field(description="Pessoas ou organizações mencionadas")
+    sentimento: Literal["positivo", "neutro", "negativo"] = Field(description="Tom global")
+
+
+texto_bruto = """
+A Câmara Municipal anunciou hoje um programa de bolsas para formação em IA.
+O presidente destacou o impacto positivo nas escolas da região.
+"""
+
+if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+    print("Sem GOOGLE_API_KEY — saltar invocação ao Gemini.")
+else:
+    modelo = (
+        os.environ.get("GEMINI_MODEL_EX11")
+        or os.environ.get("GEMINI_MODEL")
+        or "gemini-2.0-flash"
+    ).replace("models/", "")
+    llm = ChatGoogleGenerativeAI(model=modelo, temperature=0.1)
+    extrator = llm.with_structured_output(SumarioNoticia)
+    out: SumarioNoticia = extrator.invoke(
+        [HumanMessage(content="Extrai o schema a partir deste texto:\n" + texto_bruto)]
+    )
+    print(out.model_dump_json(indent=2, ensure_ascii=False))
+
+# --- Célula 19 (markdown) ---
+# ## Referências
+# 
+# - [Documentação Pydantic v2](https://docs.pydantic.dev/latest/)
+# - [`docs/explicacao_teorica.md`](docs/explicacao_teorica.md) nesta pasta
+# - LangChain: *structured output* com modelos compatíveis

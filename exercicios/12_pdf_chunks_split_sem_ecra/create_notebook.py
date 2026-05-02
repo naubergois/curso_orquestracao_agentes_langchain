@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Gera exercicio_12_sem_ecra.ipynb — PDF + splits."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def md(s: str) -> dict:
+    return {"cell_type": "markdown", "metadata": {}, "source": [s]}
+
+
+def code(s: str) -> dict:
+    return {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {},
+        "outputs": [],
+        "source": [s],
+    }
+
+
+META = {
+    "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+    "language_info": {"name": "python", "version": "3.11.0"},
+}
+
+INTRO = """# Exercício 12 — PDFs, texto extraído e *chunks*
+
+**Objetivo:** percorrer o pipeline típico antes do RAG ou dos agentes sobre documentos:
+
+1. **Gerar** PDFs pedagógicos (ReportLab — texto fictício).
+2. **Extrair** texto por página (`pypdf`).
+3. **Dividir** o texto em troços (**LangChain Text Splitters**): recursivo vs por caracteres.
+4. Ver o efeito do **overlap** entre troços consecutivos.
+5. Criar objetos **`Document`** com **metadata** (ficheiro e página).
+
+**Docker:** `./run.sh` nesta pasta. Este exercício **não precisa** de `GOOGLE_API_KEY`.
+
+Relação com outros exercícios: o **09** junta embeddings + vector store; o **13** (neste repo) usa **agente** sobre chunks parecidos."""
+
+C1 = r"""from pathlib import Path
+
+ROOT = Path.cwd().resolve()
+DATA = ROOT / "data" / "pdfs_sample"
+DATA.mkdir(parents=True, exist_ok=True)
+
+print("ROOT:", ROOT)
+print("PDFs em:", DATA)
+"""
+
+C2 = r"""# 1) Gerar dois PDFs fictícios (várias secções → várias páginas possíveis)
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+
+def _xml(txt: str) -> str:
+    return (
+        txt.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br/>")
+    )
+
+
+def escrever_pdf(path: Path, titulo_capa: str, blocos: list[tuple[str, str]]) -> None:
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(
+        str(path),
+        pagesize=A4,
+        rightMargin=2 * cm,
+        leftMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+    )
+    story = []
+    story.append(Paragraph(_xml(titulo_capa), styles["Title"]))
+    story.append(Spacer(1, 16))
+    for subtitulo, corpo in blocos:
+        story.append(Paragraph(_xml(subtitulo), styles["Heading2"]))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(_xml(corpo), styles["Normal"]))
+        story.append(Spacer(1, 14))
+    doc.build(story)
+
+
+blocos_politicas: list[tuple[str, str]] = [
+    (
+        "1. Retenção e minimização",
+        "A política de dados pessoais exige retenção proporcional: só se guarda o necessário "
+        "para cumprimento legal ou interesse legítimo documentado. Após o prazo, os suportes "
+        "são apagados com registo de diligência. Em auditoria, verificam-se listagens de "
+        "bases de dados críticas e extrações para relatório.",
+    ),
+    (
+        "2. Transferências internacionais",
+        "Qualquer fluxo para fora do EEE segue cláusulas tipo ou decisões de adequação. "
+        "O departamento jurídico mantém mapa de subprocessadores com país de destino e "
+        "contacto DPO. Incidentes reportados em canal dedicado em até setenta e duas horas.",
+    ),
+    (
+        "3. Controlo de acessos",
+        "Perfis de utilizador seguem o princípio do menor privilégio. Revisões trimestrais "
+        "confrontam contas ativas com mapas de funções (RH, payroll, finanças). Contas "
+        "partilhadas são proibidas; excepções exigem aprovação dupla.",
+    ),
+]
+
+blocos_reuniao: list[tuple[str, str]] = [
+    (
+        "Sumário executivo",
+        "Reunião de alinhamento entre auditoria interna, RH e TI sobre payroll off-cycle "
+        "detectado no segundo trimestre. Decidiu-se correlacionar logs de aprovação com "
+        "imagens de presença em formações obrigatórias.",
+    ),
+    (
+        "Pontos de acção",
+        "Consolidar evidências em dossier único; pedir reconciliação aos gestores de centro "
+        "de custo; validar integrações SAP com fornecedor externo. Prazo interno: quinze dias.",
+    ),
+    (
+        "Riscos levantados",
+        "Inconsistência em batidas de ponto; duplicidade de aprovações; necessidade de "
+        "cruzar achados com relatório de compliance de cibersegurança do trimestre anterior.",
+    ),
+]
+
+p1 = DATA / "politica_dados_ficticia.pdf"
+p2 = DATA / "ata_reuniao_ficticia.pdf"
+escrever_pdf(p1, "Política de dados (fictícia)", blocos_politicas)
+escrever_pdf(p2, "Ata de reunião (fictícia)", blocos_reuniao)
+p1.is_file(), p2.is_file()
+"""
+
+C3 = r"""# 2) Extração de texto com pypdf (página a página)
+
+from pypdf import PdfReader
+
+
+def texto_por_pagina(pdf_path: Path) -> list[str]:
+    r = PdfReader(str(pdf_path))
+    return [(p.extract_text() or "").strip() for p in r.pages]
+
+
+registos: list[dict] = []
+for pdf in sorted(DATA.glob("*.pdf")):
+    for idx, pg in enumerate(texto_por_pagina(pdf), start=1):
+        registos.append({"fonte": pdf.name, "pagina": idx, "texto": pg})
+
+len(registos), registos[0]["fonte"], registos[0]["pagina"], registos[0]["texto"][:180]
+"""
+
+C4 = r"""# 3) Colar páginas num único fluxo (marcadores simples) para depois dividir
+
+blob = "\n\n".join(
+    f"[{r['fonte']} — página {r['pagina']}]\n{r['texto']}"
+    for r in registos
+    if r["texto"]
+)
+len(blob), blob[:400]
+"""
+
+C5 = r"""# 4) RecursiveCharacterTextSplitter — tenta respeitar parágrafos e frases
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+split_rec = RecursiveCharacterTextSplitter(
+    chunk_size=380,
+    chunk_overlap=70,
+    separators=["\n\n", "\n", ". ", " ", ""],
+)
+chunks_rec = split_rec.split_text(blob)
+len(chunks_rec), chunks_rec[0][:280]
+"""
+
+C6 = r"""# 5) CharacterTextSplitter — corte mais «duro» ao longo do texto
+
+from langchain_text_splitters import CharacterTextSplitter
+
+split_char = CharacterTextSplitter(chunk_size=380, chunk_overlap=70)
+chunks_char = split_char.split_text(blob)
+len(chunks_char), len(chunks_rec)
+"""
+
+C7 = r"""# 6) Overlap zero vs overlap alto (mesmo chunk_size)
+
+sem_solapamento = RecursiveCharacterTextSplitter(chunk_size=320, chunk_overlap=0)
+com_solapamento = RecursiveCharacterTextSplitter(chunk_size=320, chunk_overlap=140)
+
+a = sem_solapamento.split_text(blob)
+b = com_solapamento.split_text(blob)
+len(a), len(b)
+"""
+
+C8 = r"""# 7) Documentos LangChain com metadata por página-fonte
+
+from langchain_core.documents import Document
+
+split_pagina = RecursiveCharacterTextSplitter(chunk_size=350, chunk_overlap=60)
+docs: list[Document] = []
+for r in registos:
+    t = r["texto"]
+    if len(t) < 30:
+        continue
+    for j, piece in enumerate(split_pagina.split_text(t)):
+        docs.append(
+            Document(
+                page_content=piece,
+                metadata={"fonte": r["fonte"], "pagina": r["pagina"], "chunk_idx": j},
+            )
+        )
+
+len(docs)
+"""
+
+C9 = r"""# 8) Tabela-resumo (pandas)
+
+import pandas as pd
+
+df = pd.DataFrame(
+    [{**d.metadata, "n_chars": len(d.page_content), "inicio": d.page_content[:80]} for d in docs]
+)
+df.head(12)
+"""
+
+C10 = r"""# 9) Síntese
+
+print("Splitters vistos: RecursiveCharacterTextSplitter, CharacterTextSplitter")
+print("Próximo passo natural: embeddings + vector store (ex. 09) ou agente com tools (ex. 13).")
+"""
+
+cells = [
+    md(INTRO),
+    code(C1),
+    code(C2),
+    code(C3),
+    code(C4),
+    code(C5),
+    code(C6),
+    code(C7),
+    code(C8),
+    code(C9),
+    code(C10),
+]
+
+nb = {"nbformat": 4, "nbformat_minor": 5, "metadata": META, "cells": cells}
+
+Path(__file__).resolve().parent.joinpath("exercicio_12_sem_ecra.ipynb").write_text(
+    json.dumps(nb, ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
+print("Notebook escrito.")

@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.venv
+venv
+.git
+.env
+data/generated
+.ipynb_checkpoints

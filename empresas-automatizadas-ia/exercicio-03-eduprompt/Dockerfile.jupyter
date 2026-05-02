@@ -1,0 +1,11 @@
+# Jupyter sem ecrã — ver run_jupyter.sh
+FROM quay.io/jupyter/minimal-notebook:latest
+
+USER root
+COPY requirements.txt /tmp/requirements-emp-jupyter.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-emp-jupyter.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}

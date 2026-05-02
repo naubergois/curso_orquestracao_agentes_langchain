@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    container_name: exercicio_02_atendimento_360
+    ports:
+      - "8501:8501"
+    env_file:
+      - ../../.env
+    volumes:
+      - .:/app

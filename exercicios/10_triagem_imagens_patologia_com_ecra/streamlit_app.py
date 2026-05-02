@@ -28,8 +28,8 @@ st.set_page_config(page_title="Ex. 10 — Triagem imagens", page_icon="🩺")
 
 st.title("Exercício 10 — Triagem com classificador e MongoDB")
 st.caption(
-    "**DermaMNIST** (MedMNIST, dados públicos). Classificador sklearn + prioridade para patologia configurável "
-    "(predef.: melanoma). Agente com ferramentas para processar amostras, ver fila e finalizar atendimento."
+    "**DermaMNIST** (MedMNIST). Classificador **CNN ResNet18** com *transfer learning* (ImageNet) + prioridade "
+    "configurável (predef.: melanoma). Agente com ferramentas para processar amostras, ver fila e finalizar atendimento."
 )
 
 if "thread_id" not in st.session_state:
@@ -67,9 +67,9 @@ def graph():
 with st.sidebar:
     st.subheader("Modelo")
     sem = _sem()
-    modelo_ok = (sem / "models" / "clf_derma.joblib").is_file()
+    modelo_ok = (sem / "models" / "cnn_derma.pt").is_file()
     if not modelo_ok:
-        st.warning("Modelo em falta. No contentor ou venv: `python treinar_classificador.py`")
+        st.warning("Modelo em falta. Corra a célula de treino do caderno ou: `python treinar_classificador.py`")
     if st.button("Treinar classificador (terminal integrado)"):
         st.info(
             f"Execute no diretório `{sem.name}`:  `python treinar_classificador.py`  "
