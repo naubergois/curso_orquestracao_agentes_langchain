@@ -1,13 +1,14 @@
-"""Esqueleto — Exercício 13: DSPy Optimizer. Implemente o enunciado completo."""
+"""Exercício 13 — DSPy Optimizer: comparação de prompts e métrica."""
 
 from __future__ import annotations
 
 import os
-
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+
+from app.dspy_pipeline import avaliar
 
 
 def _carregar_env() -> None:
@@ -19,17 +20,22 @@ def _carregar_env() -> None:
 
 _carregar_env()
 
-app = FastAPI(title="DSPy Optimizer", version="0.0.0")
+app = FastAPI(title="DSPy Optimizer", version="1.0.0")
 
 
 @app.get("/health")
 def health() -> dict:
-    return {
-        "status": "ok",
-        "exercicio": 13,
-        "empresa": "DSPy Optimizer",
-        "nota": "Esqueleto funcional — desenvolver chains, agents, vector DB, etc., conforme o enunciado.",
-    }
+    return {"status": "ok", "exercicio": 13, "empresa": "DSPy Optimizer"}
+
+
+@app.post("/avaliar")
+def avaliar_endpoint() -> dict:
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(status_code=500, detail="Defina GOOGLE_API_KEY.")
+    try:
+        return avaliar()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def main() -> None:

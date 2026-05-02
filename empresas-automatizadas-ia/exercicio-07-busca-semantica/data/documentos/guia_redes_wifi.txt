@@ -1,0 +1,4 @@
+Guia rápido — redes sem fios no escritório (fictício)
+
+A rede convidada não tem acesso às pastas internas. Para impressoras partilhadas,
+ligar à rede CORP segura. Se o portátil não associa ao ponto de acesso, esquecer SSID e voltar a configurar certificado.

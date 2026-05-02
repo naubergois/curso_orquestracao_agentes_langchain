@@ -1,13 +1,15 @@
-"""Esqueleto — Exercício 20: Empresa Autônoma Integrada. Implemente o enunciado completo."""
+"""Exercício 20 — Empresa Autónoma Integrada: API + LangGraph + RAG + observabilidade."""
 
 from __future__ import annotations
 
 import os
-
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from app.empresa_graph import executar_pipeline
 
 
 def _carregar_env() -> None:
@@ -19,7 +21,11 @@ def _carregar_env() -> None:
 
 _carregar_env()
 
-app = FastAPI(title="Empresa Autônoma Integrada", version="0.0.0")
+app = FastAPI(title="Empresa Autónoma Integrada", version="1.0.0")
+
+
+class PipelineIn(BaseModel):
+    mensagem: str = Field(..., min_length=3)
 
 
 @app.get("/health")
@@ -27,9 +33,18 @@ def health() -> dict:
     return {
         "status": "ok",
         "exercicio": 20,
-        "empresa": "Empresa Autônoma Integrada",
-        "nota": "Esqueleto funcional — desenvolver chains, agents, vector DB, etc., conforme o enunciado.",
+        "langsmith": bool(os.environ.get("LANGCHAIN_TRACING_V2")),
     }
+
+
+@app.post("/pipeline")
+def pipeline(body: PipelineIn) -> dict:
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(status_code=500, detail="Defina GOOGLE_API_KEY.")
+    try:
+        return executar_pipeline(body.mensagem)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def main() -> None:

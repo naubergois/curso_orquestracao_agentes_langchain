@@ -1,13 +1,15 @@
-"""Esqueleto — Exercício 14: TutorGraph. Implemente o enunciado completo."""
+"""Exercício 14 — TutorGraph: grafo LangGraph + estado tipado (Pydantic na API)."""
 
 from __future__ import annotations
 
 import os
-
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+
+from app.schemas import TutorPedido, TutorResultado
+from app.tutor_graph import executar_sessao
 
 
 def _carregar_env() -> None:
@@ -19,17 +21,23 @@ def _carregar_env() -> None:
 
 _carregar_env()
 
-app = FastAPI(title="TutorGraph", version="0.0.0")
+app = FastAPI(title="TutorGraph", version="1.0.0")
 
 
 @app.get("/health")
 def health() -> dict:
-    return {
-        "status": "ok",
-        "exercicio": 14,
-        "empresa": "TutorGraph",
-        "nota": "Esqueleto funcional — desenvolver chains, agents, vector DB, etc., conforme o enunciado.",
-    }
+    return {"status": "ok", "exercicio": 14, "empresa": "TutorGraph"}
+
+
+@app.post("/sessao", response_model=TutorResultado)
+def sessao(body: TutorPedido) -> TutorResultado:
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(status_code=500, detail="Defina GOOGLE_API_KEY.")
+    try:
+        raw = executar_sessao(body.tema.strip(), body.resposta_aluno.strip(), body.nivel.strip())
+        return TutorResultado.model_validate(raw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def main() -> None:

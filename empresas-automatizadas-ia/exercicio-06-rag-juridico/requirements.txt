@@ -1,9 +1,15 @@
+# RAG Jurídico — LlamaIndex + ChromaDB + Gemini (embeddings + LLM)
+# LangChain: usado no notebook `exercicio_06_sem_ecra.ipynb` (RAG com Chroma + Gemini).
 python-dotenv>=1.0.0,<2
 fastapi>=0.115.0,<1
 uvicorn[standard]>=0.32.0,<1
 pydantic>=2.10.0,<3
-langchain-community>=0.3.0
-chromadb>=0.5.0
-langchain-core>=0.3.0
-langchain-google-genai>=2.0.0
-
+chromadb>=0.5.0,<1
+posthog>=2.4.0,<6.0.0
+llama-index-core>=0.13.0,<0.15
+llama-index-vector-stores-chroma>=0.4.0,<0.6
+llama-index-embeddings-google-genai>=0.5.0,<1
+llama-index-llms-google-genai>=0.9.0,<1
+langchain-core>=0.3.0,<0.4
+langchain-community>=0.3.0,<0.4
+langchain-google-genai>=2.0.0,<3

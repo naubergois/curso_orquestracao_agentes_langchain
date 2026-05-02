@@ -1,10 +1,27 @@
 services:
-  app:
+  streamlit:
     build: .
-    container_name: exercicio_19_interface_agent_studio
+    container_name: exercicio_19_streamlit
+    command: streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=8501
     ports:
-      - "8000:8000"
+      - "8519:8501"
     env_file:
-      - ../../.env
+      - .env
     volumes:
       - .:/app
+    environment:
+      PYTHONPATH: /app
+
+  gradio:
+    build: .
+    container_name: exercicio_19_gradio
+    command: python gradio_app.py
+    ports:
+      - "7869:7860"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    environment:
+      PYTHONPATH: /app
+      GRADIO_PORT: "7860"

@@ -1,13 +1,16 @@
-"""Esqueleto — Exercício 12: Semantic Kernel Office. Implemente o enunciado completo."""
+"""Exercício 12 — Semantic Kernel Office: skills administrativas via API."""
 
 from __future__ import annotations
 
+import asyncio
 import os
-
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from app.office_skills import SkillNome, executar_skill
 
 
 def _carregar_env() -> None:
@@ -19,17 +22,32 @@ def _carregar_env() -> None:
 
 _carregar_env()
 
-app = FastAPI(title="Semantic Kernel Office", version="0.0.0")
+app = FastAPI(title="Semantic Kernel Office", version="1.0.0")
+
+
+class ExecutarIn(BaseModel):
+    skill: SkillNome = Field(..., description="resumir | email | tarefas | reuniao (composta)")
+    texto: str = Field(..., min_length=3)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {
-        "status": "ok",
-        "exercicio": 12,
-        "empresa": "Semantic Kernel Office",
-        "nota": "Esqueleto funcional — desenvolver chains, agents, vector DB, etc., conforme o enunciado.",
-    }
+    return {"status": "ok", "exercicio": 12, "empresa": "Semantic Kernel Office"}
+
+
+@app.post("/executar")
+async def executar(body: ExecutarIn) -> dict:
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(status_code=500, detail="Defina GOOGLE_API_KEY.")
+    try:
+        return await executar_skill(body.skill, body.texto)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/executar_sync")
+def executar_sync(body: ExecutarIn) -> dict:
+    return asyncio.run(executar_skill(body.skill, body.texto))
 
 
 def main() -> None:

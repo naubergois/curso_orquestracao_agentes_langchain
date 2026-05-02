@@ -2,6 +2,8 @@ python-dotenv>=1.0.0,<2
 fastapi>=0.115.0,<1
 uvicorn[standard]>=0.32.0,<1
 pydantic>=2.10.0,<3
-langchain-core>=0.3.0
-langchain-google-genai>=2.0.0
-
+haystack-ai>=2.24.0,<3
+qdrant-haystack>=7.0.0,<8
+google-genai-haystack>=3.0.0,<4
+sentence-transformers>=3.0.0,<4
+torch>=2.2.0,<3

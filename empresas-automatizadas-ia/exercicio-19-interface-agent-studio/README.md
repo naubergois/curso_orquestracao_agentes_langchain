@@ -2,34 +2,81 @@
 
 ## 1. Visão geral
 
-Projeto **esqueleto** gerado para cumprir estrutura do curso (`run.sh`, Docker, pastas). Implemente o enunciado (frameworks específicos, RAG, agentes, etc.).
+Duas UIs (**Streamlit** e **Gradio**) sobre o **mesmo agente** Python, para comparar velocidade de prototipagem e UX.
 
-## 2–5. Objetivos / Frameworks / Arquitetura
+## 2. Objetivos do exercício
 
-Ver documentação global do curso e complete `docs/`.
+- Parametrizar **modelo**, **tom** e **temperatura** (extra).
+- Mostrar trade-offs entre frameworks de UI.
 
-## 6. Como executar *(sem ecrã — Jupyter)*
+## 3. Frameworks utilizados
 
-```bash
-./run.sh
+- **Streamlit**, **Gradio**, **LangChain Google GenAI**, **Docker Compose**.
+
+## 4. Arquitetura
+
+```text
+Streamlit/Gradio → app/agent_shared.responder → Gemini
 ```
 
-Jupyter Lab (`docker-compose.jupyter.yml`), como `exercicios/*_sem_ecra`. Notebook: `exercicio_NN_sem_ecra.ipynb` nesta pasta.
+## 5. Estrutura de pastas
 
-API FastAPI opcional: `./run_api.sh` (`docker-compose.yml`).
+- `streamlit_app.py`, `gradio_app.py`, `app/agent_shared.py`.
+
+## 6. Como executar com Docker
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- Streamlit: `http://localhost:8519`
+- Gradio: `http://localhost:7869`
 
 ## 7. Variáveis de ambiente
 
-Configure `GOOGLE_API_KEY` no `.env` na **raiz do repositório do curso** (o Docker Compose usa `../../.env`). Opcional: `.env` nesta pasta para sobrescrever no código.
+`GOOGLE_API_KEY` na raiz do curso (`../../.env`) ou nesta pasta.
 
-## 8. Código e explicações detalhadas
+## 8. Comparação rápida
 
-- **`exercicio_19_sem_ecra.ipynb`** — implementação completa no Jupyter.
-- **`docs/arquitetura.md`**, **`docs/explicacao_teorica.md`**, **`docs/passo_a_passo.md`**, **`docs/resultados.md`** — documentação longa por tema.
-- **`app/main.py`** — API opcional (`./run_api.sh`); esqueleto até integração com o notebook.
+| Aspeto | Streamlit | Gradio |
+| --- | --- | --- |
+| Layout | excelente para dashboards | rápido para demos ML |
+| Estado | reruns completos | handlers por evento |
+| Deploy | container simples | idem |
 
-Para regenerar notebooks/docs a partir do modelo central: `python3 scripts/generate_detalhado.py`.
+## 9–10. Exemplos
 
-## 11–12. Avaliação / melhorias
+Interfaces gráficas — introduzir mensagem e observar resposta com diferentes temperaturas.
 
-Substituir este README pelo modelo completo do curso quando o exercício estiver implementado.
+## 11. Critérios de avaliação
+
+Duas apps funcionais, README comparativo, Docker.
+
+## 12. Possíveis melhorias
+
+Upload de ficheiros, histórico de chat, temas custom.
+
+## 13. Testes automatizados
+
+Os testes do monorepo vivem na raiz [`empresas-automatizadas-ia/tests/`](../tests/) e validam sobretudo **`GET /health`** desta API (quando existe FastAPI em `app/main.py`).
+
+```bash
+cd ..    # raiz `empresas-automatizadas-ia/` (pasta que contém `tests/` e `scripts/`)
+pip install -r requirements-dev.txt
+./scripts/install_test_deps.sh   # ou apenas: pip install -r requirements.txt (nesta pasta)
+pytest tests -m "not integration"
+```
+
+- **Integração** (Gemini real): `pytest tests -m integration` — requer `GOOGLE_API_KEY`.
+
+Guia completo: [`docs/GUIA_TESTES.md`](../docs/GUIA_TESTES.md).
+
+### Troubleshooting
+
+| Sintoma | O que verificar |
+|--------|------------------|
+| `ModuleNotFoundError` | Instalar o `requirements.txt` **desta** pasta; para a suíte inteira usar `./scripts/install_test_deps.sh`. |
+| Conflitos de versão entre empresas | Usar um **venv por exercício** ou correr testes dentro do **Dockerfile** desse exercício. |
+| Ex. 07 — `/buscar` falha | Criar o índice FAISS com `scripts/criar_indice.py` antes de testes que chamem `/buscar`. |
+| Ex. 09 / LangGraph | Manter `langgraph>=0.2,<0.3` com `langchain-core` 0.3.x (ver `GUIA_TESTES.md`). |

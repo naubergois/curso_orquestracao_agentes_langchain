@@ -96,3 +96,27 @@ Notebook: `exercicio_05_sem_ecra.ipynb` (didático; a referência de produto é 
 ## Teste rápido (`curl`)
 
 Ver exemplos em [`docs/API.md`](docs/API.md).
+
+## 13. Testes automatizados
+
+Os testes do monorepo vivem na raiz [`empresas-automatizadas-ia/tests/`](../tests/) e validam sobretudo **`GET /health`** desta API (quando existe FastAPI em `app/main.py`).
+
+```bash
+cd ..    # raiz `empresas-automatizadas-ia/` (pasta que contém `tests/` e `scripts/`)
+pip install -r requirements-dev.txt
+./scripts/install_test_deps.sh   # ou apenas: pip install -r requirements.txt (nesta pasta)
+pytest tests -m "not integration"
+```
+
+- **Integração** (Gemini real): `pytest tests -m integration` — requer `GOOGLE_API_KEY`.
+
+Guia completo: [`docs/GUIA_TESTES.md`](../docs/GUIA_TESTES.md).
+
+### Troubleshooting
+
+| Sintoma | O que verificar |
+|--------|------------------|
+| `ModuleNotFoundError` | Instalar o `requirements.txt` **desta** pasta; para a suíte inteira usar `./scripts/install_test_deps.sh`. |
+| Conflitos de versão entre empresas | Usar um **venv por exercício** ou correr testes dentro do **Dockerfile** desse exercício. |
+| Ex. 07 — `/buscar` falha | Criar o índice FAISS com `scripts/criar_indice.py` antes de testes que chamem `/buscar`. |
+| Ex. 09 / LangGraph | Manter `langgraph>=0.2,<0.3` com `langchain-core` 0.3.x (ver `GUIA_TESTES.md`). |

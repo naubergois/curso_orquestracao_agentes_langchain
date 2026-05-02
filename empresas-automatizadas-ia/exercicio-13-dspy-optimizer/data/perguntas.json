@@ -1,0 +1,5 @@
+[
+  {"id": "q1", "pergunta": "O que é um embedding?", "resposta_esperada": "representação vetorial"},
+  {"id": "q2", "pergunta": "Por que usar FAISS?", "resposta_esperada": "busca aproximada rápida"},
+  {"id": "q3", "pergunta": "Diferença entre keyword e semântica?", "resposta_esperada": "sinónimos"}
+]

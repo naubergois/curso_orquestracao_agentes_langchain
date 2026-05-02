@@ -1,10 +1,33 @@
 services:
-  app:
+  api:
     build: .
-    container_name: exercicio_20_empresa_autonoma_integrada
+    container_name: exercicio_20_api
+    command: python app/main.py
     ports:
-      - "8000:8000"
+      - "8020:8000"
     env_file:
-      - ../../.env
+      - .env
     volumes:
       - .:/app
+      - chroma_empresa:/app/chroma_data
+    environment:
+      PYTHONPATH: /app
+
+  ui:
+    build: .
+    container_name: exercicio_20_ui
+    command: streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8520:8501"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    environment:
+      PYTHONPATH: /app
+      API_URL: http://api:8000
+    depends_on:
+      - api
+
+volumes:
+  chroma_empresa:

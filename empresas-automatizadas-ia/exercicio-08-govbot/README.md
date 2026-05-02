@@ -2,34 +2,87 @@
 
 ## 1. Visão geral
 
-Projeto **esqueleto** gerado para cumprir estrutura do curso (`run.sh`, Docker, pastas). Implemente o enunciado (frameworks específicos, RAG, agentes, etc.).
+Chatbot de **atendimento público fictício** que responde com base em documentos Markdown, usando **Haystack 2.x**, **Qdrant** como vector store e **Gemini** para geração.
 
-## 2–5. Objetivos / Frameworks / Arquitetura
+## 2. Objetivos do exercício
 
-Ver documentação global do curso e complete `docs/`.
+- Pipeline consulta: embedding → retriever Qdrant → LLM com contexto.
+- Resposta com **fontes** citadas.
+- Extra: **classificar demanda** (imposto, protocolo, serviço urbano, licença, geral).
 
-## 6. Como executar *(sem ecrã — Jupyter)*
+## 3. Frameworks utilizados
 
-```bash
-./run.sh
+- **Haystack** — componentes de retrieval e geradores Google GenAI.
+- **Qdrant** — persistência vetorial no Docker Compose.
+- **Sentence Transformers** — embeddings 384 dim (alinhado ao retriever).
+- **Docker Compose**.
+
+## 4. Arquitetura
+
+```text
+Pergunta → embedder → Qdrant retriever → Gemini (com trechos) → resposta + fontes + classe
 ```
 
-Jupyter Lab (`docker-compose.jupyter.yml`), como `exercicios/*_sem_ecra`. Notebook: `exercicio_NN_sem_ecra.ipynb` nesta pasta.
+## 5. Estrutura de pastas
 
-API FastAPI opcional: `./run_api.sh` (`docker-compose.yml`).
+- `data/publicos/*.md` — documentos fictícios.
+- `app/govbot_service.py` — indexação e pipeline.
+- `docker-compose.yml` — `app` + `qdrant`.
+
+## 6. Como executar com Docker
+
+```bash
+cp .env.example .env   # GOOGLE_API_KEY, QDRANT_URL=http://qdrant:6333
+docker compose up --build
+```
 
 ## 7. Variáveis de ambiente
 
-Configure `GOOGLE_API_KEY` no `.env` na **raiz do repositório do curso** (o Docker Compose usa `../../.env`). Opcional: `.env` nesta pasta para sobrescrever no código.
+`GOOGLE_API_KEY`, `QDRANT_URL`, modelo Gemini opcional — ver `.env.example`.
 
-## 8. Código e explicações detalhadas
+## 8. Explicação do código
 
-- **`exercicio_08_sem_ecra.ipynb`** — implementação completa no Jupyter.
-- **`docs/arquitetura.md`**, **`docs/explicacao_teorica.md`**, **`docs/passo_a_passo.md`**, **`docs/resultados.md`** — documentação longa por tema.
-- **`app/main.py`** — API opcional (`./run_api.sh`); esqueleto até integração com o notebook.
+Serviço garante coleção Qdrant criada, escrita de documentos na primeira subida e reuso em chamadas seguintes.
 
-Para regenerar notebooks/docs a partir do modelo central: `python3 scripts/generate_detalhado.py`.
+## 9. Exemplo de entrada
 
-## 11–12. Avaliação / melhorias
+```json
+POST /chat
+{"mensagem": "Como consultar débitos de IPTU?"}
+```
 
-Substituir este README pelo modelo completo do curso quando o exercício estiver implementado.
+## 10. Exemplo de saída
+
+Campos `classificacao_demanda`, `resposta`, `fontes[]` com documento e excerto.
+
+## 11. Critérios de avaliação
+
+Haystack + Qdrant corretamente ligados, Docker, README e exemplos.
+
+## 12. Possíveis melhorias
+
+Cache de queries, autenticação, avaliação offline do retrieval.
+
+## 13. Testes automatizados
+
+Os testes do monorepo vivem na raiz [`empresas-automatizadas-ia/tests/`](../tests/) e validam sobretudo **`GET /health`** desta API (quando existe FastAPI em `app/main.py`).
+
+```bash
+cd ..    # raiz `empresas-automatizadas-ia/` (pasta que contém `tests/` e `scripts/`)
+pip install -r requirements-dev.txt
+./scripts/install_test_deps.sh   # ou apenas: pip install -r requirements.txt (nesta pasta)
+pytest tests -m "not integration"
+```
+
+- **Integração** (Gemini real): `pytest tests -m integration` — requer `GOOGLE_API_KEY`.
+
+Guia completo: [`docs/GUIA_TESTES.md`](../docs/GUIA_TESTES.md).
+
+### Troubleshooting
+
+| Sintoma | O que verificar |
+|--------|------------------|
+| `ModuleNotFoundError` | Instalar o `requirements.txt` **desta** pasta; para a suíte inteira usar `./scripts/install_test_deps.sh`. |
+| Conflitos de versão entre empresas | Usar um **venv por exercício** ou correr testes dentro do **Dockerfile** desse exercício. |
+| Ex. 07 — `/buscar` falha | Criar o índice FAISS com `scripts/criar_indice.py` antes de testes que chamem `/buscar`. |
+| Ex. 09 / LangGraph | Manter `langgraph>=0.2,<0.3` com `langchain-core` 0.3.x (ver `GUIA_TESTES.md`). |

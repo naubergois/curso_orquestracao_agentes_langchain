@@ -2,34 +2,91 @@
 
 ## 1. Visão geral
 
-Projeto **esqueleto** gerado para cumprir estrutura do curso (`run.sh`, Docker, pastas). Implemente o enunciado (frameworks específicos, RAG, agentes, etc.).
+A **Semantic Kernel Office** automatiza tarefas administrativas: resumo, redação de e-mail, lista de tarefas e uma **skill composta** que resume uma reunião e gera e-mail de encaminhamento.
 
-## 2–5. Objetivos / Frameworks / Arquitetura
+## 2. Objetivos do exercício
 
-Ver documentação global do curso e complete `docs/`.
+- Integrar **Semantic Kernel** com um serviço de chat (`OpenAIChatCompletion`) apontando para **Gemini** (OpenAI-compatível).
+- Implementar **quatro skills** (`resumir`, `email`, `tarefas`, `reuniao`).
+- API simples para seleção explícita da skill.
 
-## 6. Como executar *(sem ecrã — Jupyter)*
+## 3. Frameworks utilizados
 
-```bash
-./run.sh
+- **Semantic Kernel (Python)** — `ChatHistory`, `OpenAIChatCompletion`, settings de execução.
+- **OpenAI SDK** — cliente assíncrono com `base_url` do Gemini.
+- **Docker**.
+
+## 4. Arquitetura
+
+```text
+Pedido HTTP → seleção da skill → ChatHistory(system,user) → Gemini → JSON/texto
 ```
 
-Jupyter Lab (`docker-compose.jupyter.yml`), como `exercicios/*_sem_ecra`. Notebook: `exercicio_NN_sem_ecra.ipynb` nesta pasta.
+## 5. Estrutura de pastas
 
-API FastAPI opcional: `./run_api.sh` (`docker-compose.yml`).
+- `app/office_skills.py` — lógica das skills e chamadas ao modelo.
+- `app/main.py` — FastAPI `POST /executar`.
+
+## 6. Como executar com Docker
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Serviço em `http://localhost:8012`.
 
 ## 7. Variáveis de ambiente
 
-Configure `GOOGLE_API_KEY` no `.env` na **raiz do repositório do curso** (o Docker Compose usa `../../.env`). Opcional: `.env` nesta pasta para sobrescrever no código.
+`GOOGLE_API_KEY`, `GEMINI_MODEL_SK`, `PORT` — ver `.env.example`.
 
-## 8. Código e explicações detalhadas
+## 8. Explicação do código
 
-- **`exercicio_12_sem_ecra.ipynb`** — implementação completa no Jupyter.
-- **`docs/arquitetura.md`**, **`docs/explicacao_teorica.md`**, **`docs/passo_a_passo.md`**, **`docs/resultados.md`** — documentação longa por tema.
-- **`app/main.py`** — API opcional (`./run_api.sh`); esqueleto até integração com o notebook.
+`_gerar` centraliza a invocação `get_chat_message_contents`. A skill **reuniao** pede JSON estruturado (resumo + e-mail).
 
-Para regenerar notebooks/docs a partir do modelo central: `python3 scripts/generate_detalhado.py`.
+## 9. Exemplos de entrada
 
-## 11–12. Avaliação / melhorias
+```json
+POST /executar
+{"skill": "resumir", "texto": "Texto longo ..."}
+```
 
-Substituir este README pelo modelo completo do curso quando o exercício estiver implementado.
+## 10. Exemplos de saída
+
+```json
+{"skill": "resumir", "resultado": "..."}
+```
+
+Skill `reuniao`: `resultado` é objeto JSON com `resumo`, `assunto_email`, `corpo_email` quando o modelo obedece ao formato.
+
+## 11. Critérios de avaliação
+
+Uso real do conector SK, clareza das skills, Docker e README.
+
+## 12. Possíveis melhorias
+
+Plugins SK em pastas (`skprompt.txt`), planner automático, testes de regressão por skill.
+
+## 13. Testes automatizados
+
+Os testes do monorepo vivem na raiz [`empresas-automatizadas-ia/tests/`](../tests/) e validam sobretudo **`GET /health`** desta API (quando existe FastAPI em `app/main.py`).
+
+```bash
+cd ..    # raiz `empresas-automatizadas-ia/` (pasta que contém `tests/` e `scripts/`)
+pip install -r requirements-dev.txt
+./scripts/install_test_deps.sh   # ou apenas: pip install -r requirements.txt (nesta pasta)
+pytest tests -m "not integration"
+```
+
+- **Integração** (Gemini real): `pytest tests -m integration` — requer `GOOGLE_API_KEY`.
+
+Guia completo: [`docs/GUIA_TESTES.md`](../docs/GUIA_TESTES.md).
+
+### Troubleshooting
+
+| Sintoma | O que verificar |
+|--------|------------------|
+| `ModuleNotFoundError` | Instalar o `requirements.txt` **desta** pasta; para a suíte inteira usar `./scripts/install_test_deps.sh`. |
+| Conflitos de versão entre empresas | Usar um **venv por exercício** ou correr testes dentro do **Dockerfile** desse exercício. |
+| Ex. 07 — `/buscar` falha | Criar o índice FAISS com `scripts/criar_indice.py` antes de testes que chamem `/buscar`. |
+| Ex. 09 / LangGraph | Manter `langgraph>=0.2,<0.3` com `langchain-core` 0.3.x (ver `GUIA_TESTES.md`). |

@@ -1,0 +1,3 @@
+# Dependências para testes em todo o monorepo empresas-automatizadas-ia
+pytest>=8.0,<9
+httpx>=0.27,<1

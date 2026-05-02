@@ -1,0 +1,5 @@
+Política de suporte interno — Busca Semântica Ltda. (fictício)
+
+O suporte técnico deve responder pedidos de nível 1 em até quatro horas úteis.
+Para falhas de rede corporativa, abrir ticket na fila INFRA com prioridade média.
+Palavras-chave frequentes: VPN, Wi‑Fi, proxy, autenticação.

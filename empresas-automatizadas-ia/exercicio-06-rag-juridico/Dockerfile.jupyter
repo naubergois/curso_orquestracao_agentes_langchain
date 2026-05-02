@@ -1,5 +1,9 @@
 # Jupyter sem ecrã — ver run_jupyter.sh
-FROM quay.io/jupyter/minimal-notebook:latest
+#
+# `minimal-notebook:latest` pode trazer Python 3.13; em aarch64 o `chroma-hnswlib` (ChromaDB)
+# frequentemente não tem wheel cp313 e falha a compilar («Unsupported compiler»).
+# `python-3.12.11` mantém wheels binários alinhados ao ex. RAG auditoria / jurídico do curso.
+FROM quay.io/jupyter/minimal-notebook:python-3.12.11
 
 USER root
 COPY requirements.txt /tmp/requirements-emp-jupyter.txt

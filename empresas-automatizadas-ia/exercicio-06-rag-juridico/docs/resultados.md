@@ -1,16 +1,17 @@
-# Resultados esperados — Exercício 06: RAG Jurídico
+# Resultados esperados — RAG Jurídico (Ex. 6)
 
 ## Funcional
-- Todas as células críticas executam sem excepção com `.env` válido.
-- Saídas coerentes com o tipo `rag` (ver notebook).
+
+- `python scripts/indexar.py` conclui sem erro e cria `data/chroma_juridico/`.
+- `python scripts/consultar.py` (ou `POST /perguntar`) devolve `resposta` e lista **`fontes`** com `arquivo`, `score` e `trecho`.
+- Perguntas sobre **prazo de resposta contratual** recuperam trechos das normas/contrato fictícios (15 dias úteis).
 
 ## Qualidade
-- Textos em **português europeu** quando aplicável ao persona.
-- Respostas RAG citam ou baseiam-se nos trechos recuperados.
+
+- Resposta em **português europeu**, fundamentada nos trechos quando o retriever acerta.
+- Erro claro se o índice ainda não foi criado.
 
 ## Avaliação
-- Consegue explicar cada bloco do notebook a um colega.
-- Identifica limitações (quota API, custo, ausência de frameworks opcionais).
 
-## Evolução
-Substituir simulações (ex.: Crew sequencial) pelos frameworks completos indicados no enunciado quando o ambiente permitir `pip install`.
+- Explicar o fluxo: Loader → índice → Chroma → query engine.
+- Discutir limitações: custo API, quota, qualidade do chunking, necessidade de atualizar o índice quando os `.md` mudam.

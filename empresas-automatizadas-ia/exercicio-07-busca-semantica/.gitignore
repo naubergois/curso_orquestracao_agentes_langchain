@@ -1,5 +1,1 @@
-.env
-__pycache__/
-.venv/
-venv/
-notebooks/.ipynb_checkpoints/
+data/indices/

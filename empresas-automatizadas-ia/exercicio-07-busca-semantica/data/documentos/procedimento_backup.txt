@@ -1,0 +1,5 @@
+Procedimento de cópia de segurança (fictício)
+
+Os portáteis são salvaguardados todas as noites para armazenamento geo‑redundante.
+Em recuperação de desastre, contactar a equipa de continuidade de negócio.
+Não usar este canal para pedidos de palavra‑passe esquecida — usar self‑service.

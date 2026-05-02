@@ -1,0 +1,5 @@
+Manual de atendimento ao utilizador (fictício)
+
+Quando o colaborador diz que «não consegue entrar no sistema», verificar primeiro credenciais,
+depois conectividade sem fios e perfil de grupo. Em caso de bloqueio de conta, solicitar reset via RH.
+O contacto humano deve ser cordial e registado no CRM interno.
