@@ -54,6 +54,10 @@ A API **`POST /perguntar`** e o script **`consultar.py`** devolvem também os **
 
 ## Fluxo rápido
 
+**Embeddings:** no notebook LangChain usar **`gemini-embedding-001`** (`GEMINI_EMBEDDING_MODEL` ou `GEMINI_EMBEDDING_MODEL_EX06` no `.env`). O modelo **`text-embedding-004`** já não está disponível na Gemini API.
+
+**Aviso `onnxruntime` / CPU vendor:** em algumas VMs aparece `Unknown CPU vendor` — aviso benigno do ONNX Runtime (dependência transitiva, ex. Chroma).
+
 1. **Variáveis:** `GOOGLE_API_KEY` no `.env` na raiz do repo do curso.
 2. **Subir API:** `./run_api.sh` (ou `./run_api.sh --fg`).
 3. **Indexar** (uma vez, ou após mudar documentos):

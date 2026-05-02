@@ -615,7 +615,13 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 import os
 
-emb = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+_raw = (
+    os.environ.get("GEMINI_EMBEDDING_MODEL_EX06")
+    or os.environ.get("GEMINI_EMBEDDING_MODEL")
+    or "gemini-embedding-001"
+).replace("models/", "")
+_embed = "gemini-embedding-001" if "text-embedding-004" in _raw else (_raw or "gemini-embedding-001")
+emb = GoogleGenerativeAIEmbeddings(model=_embed)
 vectordb = Chroma.from_documents(
     [Document(page_content=c["chunk"], metadata={"fonte": c["id"]}) for c in chunks],
     embedding=emb,
@@ -724,16 +730,22 @@ print((resp_p | llm | StrOutputParser()).invoke({"ctx": ctx, "q": "Como peço re
             code_cell(
                 """from langchain_core.tools import tool
 
+
 @tool
 def abrir_chamado(descricao: str, email: str) -> str:
+    \"\"\"Abre um chamado de suporte simulado para o email indicado.\"\"\"
     return f"CHAMADO-UUID-991 aberto para {email}: {descricao[:80]}"
+
 
 @tool
 def consultar_status(ticket_id: str) -> str:
+    \"\"\"Consulta o estado simulado de um ticket pelo identificador.\"\"\"
     return f"Ticket {ticket_id}: estado ABERTO (simulado)"
+
 
 @tool
 def classificar_problema(texto: str) -> str:
+    \"\"\"Classifica o tipo de problema técnico descrito (simulado).\"\"\"
     return "Classificação: rede/Wi‑Fi (simulado)"
 """
             ),

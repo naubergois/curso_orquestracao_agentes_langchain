@@ -19,7 +19,7 @@ _INDEX_FLAG = _CHROMA / ".indexed_ok"
 
 
 def _embeddings():
-    model = os.environ.get("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+    model = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001").replace("models/", "")
     return GoogleGenerativeAIEmbeddings(model=model)
 
 

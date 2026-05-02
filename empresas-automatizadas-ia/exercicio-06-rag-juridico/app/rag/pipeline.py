@@ -51,13 +51,23 @@ def modelo_llm() -> str:
     return raw.replace("models/", "").strip()
 
 
+def normalize_gemini_embedding_model(raw: str) -> str:
+    """Modelos como text-embedding-004 deixaram de existir em embedContent — usar gemini-embedding-001."""
+    n = (raw or "").replace("models/", "").strip()
+    if not n:
+        return "gemini-embedding-001"
+    if "text-embedding-004" in n:
+        return "gemini-embedding-001"
+    return n
+
+
 def modelo_embedding() -> str:
     raw = (
         os.environ.get("GEMINI_EMBEDDING_MODEL_EX06")
         or os.environ.get("GEMINI_EMBEDDING_MODEL")
         or "gemini-embedding-001"
     )
-    return raw.replace("models/", "").strip()
+    return normalize_gemini_embedding_model(raw)
 
 
 def embed_model() -> GoogleGenAIEmbedding:

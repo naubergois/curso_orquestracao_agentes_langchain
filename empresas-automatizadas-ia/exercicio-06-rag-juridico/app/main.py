@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from app.rag.pipeline import consultar_com_fontes
+from app.rag.pipeline import consultar_com_fontes, normalize_gemini_embedding_model
 
 
 def _carregar_env() -> None:
@@ -60,11 +60,11 @@ def health() -> dict:
         "llm": (os.environ.get("GEMINI_MODEL_EX06") or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").replace(
             "models/", ""
         ),
-        "embedding": (
+        "embedding": normalize_gemini_embedding_model(
             os.environ.get("GEMINI_EMBEDDING_MODEL_EX06")
             or os.environ.get("GEMINI_EMBEDDING_MODEL")
             or "gemini-embedding-001"
-        ).replace("models/", ""),
+        ),
         "nota": "Execute `python scripts/indexar.py` antes da primeira consulta.",
     }
 

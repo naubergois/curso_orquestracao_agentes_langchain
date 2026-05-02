@@ -12,7 +12,8 @@ Chatbot de **atendimento público fictício** que responde com base em documento
 
 ## 3. Frameworks utilizados
 
-- **Haystack** — componentes de retrieval e geradores Google GenAI.
+- **Haystack** — componentes de retrieval e geradores Google GenAI (`app/govbot_service.py`).
+- **LangChain** (`langchain-core`, `langchain-google-genai`) — notebook `exercicio_08_sem_ecra.ipynb` (exemplo LCEL com classificação e resposta).
 - **Qdrant** — persistência vetorial no Docker Compose.
 - **Sentence Transformers** — embeddings 384 dim (alinhado ao retriever).
 - **Docker Compose**.

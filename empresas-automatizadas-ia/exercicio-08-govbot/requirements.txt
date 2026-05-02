@@ -2,6 +2,9 @@ python-dotenv>=1.0.0,<2
 fastapi>=0.115.0,<1
 uvicorn[standard]>=0.32.0,<1
 pydantic>=2.10.0,<3
+# Notebook `exercicio_08_sem_ecra.ipynb` — classificação + resposta com LangChain LCEL
+langchain-core>=0.3.0,<0.4
+langchain-google-genai>=2.0.0,<5
 haystack-ai>=2.24.0,<3
 qdrant-haystack>=7.0.0,<8
 google-genai-haystack>=3.0.0,<4
