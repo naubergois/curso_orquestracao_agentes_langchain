@@ -1,0 +1,21 @@
+# Streamlit — ex. 18 (Nielsen + pipeline de notícias do ex. 17 no mesmo contentor).
+name: curso-ex18-frontend-agent
+
+services:
+  streamlit:
+    build:
+      context: ../..
+      dockerfile: exercicios/18_agente_frontend_design/Dockerfile
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX18: ${GEMINI_MODEL_EX18:-}
+      GEMINI_MODEL_EX17: ${GEMINI_MODEL_EX17:-}
+      PYTHONUNBUFFERED: "1"

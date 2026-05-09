@@ -1,0 +1,11 @@
+# UI Streamlit do ex. 17 + agente de design do ex. 18 (mesmo contentor).
+streamlit>=1.40.0,<2
+python-dotenv>=1.0.0,<2
+pydantic>=2.7.0,<3
+langchain>=1.0.0,<2
+langchain-community>=0.3.0,<1
+langchain-google-genai>=2.0.0,<5
+langchain-core>=0.3.0
+langgraph>=0.2.0,<2
+duckduckgo-search>=6.0.0,<10
+pandas>=2.0.0,<3

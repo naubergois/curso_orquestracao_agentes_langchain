@@ -1,0 +1,20 @@
+# Streamlit — boletim ex. 17 + agente frontend ex. 18 (contexto = raiz do repo).
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+COPY exercicios/17_noticias_resumo_executivo_sem_ecra/requirements-streamlit.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements.txt
+
+COPY exercicios/17_noticias_resumo_executivo_sem_ecra/noticias_agentes.py /app/
+COPY exercicios/17_noticias_resumo_executivo_sem_ecra/streamlit_app.py /app/
+COPY exercicios/18_agente_frontend_design/agente_frontend.py /app/
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
