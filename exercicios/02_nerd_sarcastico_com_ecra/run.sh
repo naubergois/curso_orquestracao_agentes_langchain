@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Exercício 02 com ecrã — predefinição: Docker (detached).
-#   ./run.sh              → docker compose up --build -d
+#   ./run.sh              → docker compose up --build -d (para outros exercícios em exercicios/*/ antes)
+#   ./run.sh --no-cache   → rebuild completo da imagem antes do up
 #   ./run.sh --fg         → docker em primeiro plano
 #   ./run.sh --local      → Streamlit com venv na raiz do repo
 
@@ -51,11 +52,16 @@ run_local() {
 
 run_docker() {
   local foreground=false
+  local no_cache_build=false
   local compose_extra=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --fg | --foreground)
         foreground=true
+        shift
+        ;;
+      --no-cache)
+        no_cache_build=true
         shift
         ;;
       *)
@@ -86,6 +92,9 @@ run_docker() {
   fi
 
   cd "${SCRIPT_DIR}"
+  if [[ "${no_cache_build}" == true ]]; then
+    docker compose build --no-cache streamlit
+  fi
   if $foreground; then
     echo "Docker (primeiro plano): http://localhost:${STREAMLIT_PORT}"
     if [[ ${#compose_extra[@]} -gt 0 ]]; then

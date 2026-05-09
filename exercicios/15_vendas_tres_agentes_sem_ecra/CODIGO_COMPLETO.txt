@@ -1,0 +1,526 @@
+# ================================================================================
+# CODIGO_COMPLETO.txt — export estático do exercício (leitura offline / impressão)
+# Gerado por: exercicios/gerar_codigo_completo_txt.py
+# Não editar à mão: voltar a correr o script após alterar .py ou .ipynb.
+# ================================================================================
+
+# Pasta: 15_vendas_tres_agentes_sem_ecra
+
+================================================================================
+# FICHEIRO: requirements.txt
+================================================================================
+
+python-dotenv>=1.0.0,<2
+langchain>=1.0.0,<2
+langchain-openai>=1.0.0,<2
+langgraph>=0.2.0,<2
+psycopg2-binary>=2.9.0,<3
+
+================================================================================
+# FICHEIRO: agentes_vendas.py
+================================================================================
+
+"""Exercício 15 — três agentes (estoque, marketing, análise) com PostgreSQL e DeepSeek."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+import psycopg2
+from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from psycopg2.extras import RealDictCursor
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for directory in (here.parent, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            return
+
+
+_load_local_env()
+
+_DEFAULT_MODEL = "deepseek-chat"
+
+
+def _database_url() -> str:
+    url = (os.environ.get("DATABASE_URL") or "").strip()
+    if url:
+        return url
+    return "postgresql://curso:curso@127.0.0.1:5435/vendas_demo"
+
+
+def _connect():
+    return psycopg2.connect(_database_url(), connect_timeout=10)
+
+
+def _rows_produtos(apenas_com_stock: bool) -> list[dict]:
+    sql = (
+        "SELECT id, sku, nome, preco_unitario, quantidade_estoque, categoria "
+        "FROM produtos ORDER BY id ASC"
+    )
+    with _connect() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    out = [dict(r) for r in rows]
+    if apenas_com_stock:
+        out = [r for r in out if int(r["quantidade_estoque"] or 0) > 0]
+    return out
+
+
+def _ensure_deepseek_key() -> None:
+    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "Defina DEEPSEEK_API_KEY no `.env` na raiz do repositório (exercício 15)."
+        )
+
+
+def build_chat_model(*, temperature: float = 0.2) -> ChatOpenAI:
+    _ensure_deepseek_key()
+    model = (os.environ.get("DEEPSEEK_MODEL") or _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    base_url = (os.environ.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip().rstrip("/")
+    return ChatOpenAI(
+        model=model,
+        api_key=os.environ["DEEPSEEK_API_KEY"].strip(),
+        base_url=base_url,
+        temperature=temperature,
+    )
+
+
+# --- Ferramentas do agente de estoque + registo de vendas ---
+
+
+@tool
+def listar_produtos_em_estoque(apenas_com_stock: bool = True) -> str:
+    """Lista produtos: id, sku, nome, preco_unitario, quantidade_estoque, categoria.
+    Se apenas_com_stock=True, só linhas com quantidade_estoque > 0."""
+    try:
+        rows = _rows_produtos(apenas_com_stock)
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def obter_produto_por_id(produto_id: int) -> str:
+    """Devolve uma linha completa da tabela produtos pelo id."""
+    try:
+        pid = int(produto_id)
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM produtos WHERE id = %s", (pid,))
+                row = cur.fetchone()
+        if not row:
+            return json.dumps({"erro": f"Produto id={pid} inexistente."}, ensure_ascii=False)
+        return json.dumps(dict(row), ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def ajustar_estoque(produto_id: int, delta: int) -> str:
+    """Altera o stock: delta positivo = entrada, negativo = saída (sem validar venda)."""
+    try:
+        pid = int(produto_id)
+        d = int(delta)
+        with _connect() as conn:
+            conn.autocommit = False
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT quantidade_estoque FROM produtos WHERE id = %s FOR UPDATE",
+                        (pid,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        conn.rollback()
+                        return json.dumps({"erro": f"Produto id={pid} inexistente."}, ensure_ascii=False)
+                    atual = int(row["quantidade_estoque"])
+                    novo = atual + d
+                    if novo < 0:
+                        conn.rollback()
+                        return json.dumps(
+                            {
+                                "erro": "Stock ficaria negativo; operação não aplicada.",
+                                "produto_id": pid,
+                                "stock_atual": atual,
+                                "delta": d,
+                            },
+                            ensure_ascii=False,
+                        )
+                    cur.execute(
+                        "UPDATE produtos SET quantidade_estoque = %s WHERE id = %s",
+                        (novo, pid),
+                    )
+                conn.commit()
+                return json.dumps(
+                    {"ok": True, "produto_id": pid, "quantidade_estoque": novo},
+                    ensure_ascii=False,
+                )
+            except Exception:
+                conn.rollback()
+                raise
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def registar_venda(produto_id: int, quantidade: int, canal: str = "online") -> str:
+    """Regista uma venda e baixa o stock de forma atómica."""
+    try:
+        pid = int(produto_id)
+        q = int(quantidade)
+        if q <= 0:
+            return json.dumps({"erro": "quantidade deve ser > 0."}, ensure_ascii=False)
+        canal_limpo = (canal or "online").strip()[:40] or "online"
+        with _connect() as conn:
+            conn.autocommit = False
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT id, preco_unitario, quantidade_estoque FROM produtos WHERE id = %s FOR UPDATE",
+                        (pid,),
+                    )
+                    pr = cur.fetchone()
+                    if not pr:
+                        conn.rollback()
+                        return json.dumps({"erro": f"Produto id={pid} inexistente."}, ensure_ascii=False)
+                    stock = int(pr["quantidade_estoque"])
+                    if stock < q:
+                        conn.rollback()
+                        return json.dumps(
+                            {
+                                "erro": "Stock insuficiente.",
+                                "produto_id": pid,
+                                "stock_atual": stock,
+                                "pedido": q,
+                            },
+                            ensure_ascii=False,
+                        )
+                    preco = float(pr["preco_unitario"])
+                    valor_total = round(preco * q, 2)
+                    cur.execute(
+                        "UPDATE produtos SET quantidade_estoque = quantidade_estoque - %s WHERE id = %s",
+                        (q, pid),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO vendas (produto_id, quantidade, valor_total, canal)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING id, data_venda
+                        """,
+                        (pid, q, valor_total, canal_limpo),
+                    )
+                    v = cur.fetchone()
+                conn.commit()
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "venda_id": int(v["id"]),
+                        "produto_id": pid,
+                        "quantidade": q,
+                        "valor_total": valor_total,
+                        "canal": canal_limpo,
+                        "data_venda": str(v["data_venda"]),
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            except Exception:
+                conn.rollback()
+                raise
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+_MSG_ESTOQUE = """És o agente de **estoque e operações** de uma loja (dados fictícios).
+
+Regras:
+- Usa sempre as ferramentas para consultar ou alterar dados na base PostgreSQL.
+- Não inventes quantidades nem preços.
+- Para vendas, usa `registar_venda` (baixa stock + grava linha em `vendas`).
+- Para entradas ou correções sem linha de venda, usa `ajustar_estoque`.
+- Responde em português europeu, de forma breve e profissional."""
+
+
+def build_agente_estoque():
+    return create_agent(
+        build_chat_model(temperature=0.15),
+        tools=[
+            listar_produtos_em_estoque,
+            obter_produto_por_id,
+            ajustar_estoque,
+            registar_venda,
+        ],
+        system_prompt=SystemMessage(content=_MSG_ESTOQUE),
+        checkpointer=MemorySaver(),
+    )
+
+
+# --- Marketing (leitura de stock + registo de campanhas) ---
+
+
+@tool
+def listar_produtos_para_campanha() -> str:
+    """Lista produtos com stock > 0 (para divulgação)."""
+    try:
+        rows = _rows_produtos(True)
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def registar_campanha_marketing(titulo: str, texto: str, produtos_ids_csv: str) -> str:
+    """Guarda rascunho de campanha. produtos_ids_csv: ids separados por vírgula (ex: "1,3,5")."""
+    try:
+        titulo = (titulo or "").strip()
+        texto = (texto or "").strip()
+        raw = (produtos_ids_csv or "").strip()
+        ids: list[int] = []
+        for part in re.split(r"[,\s;]+", raw):
+            part = part.strip()
+            if part.isdigit():
+                ids.append(int(part))
+        if not titulo or not texto:
+            return json.dumps({"erro": "titulo e texto são obrigatórios."}, ensure_ascii=False)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO campanhas_marketing (titulo, texto, produtos_ids)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, criado_em
+                    """,
+                    (titulo, texto, ids),
+                )
+                row = cur.fetchone()
+                conn.commit()
+        return json.dumps(
+            {"ok": True, "campanha_id": int(row[0]), "criado_em": str(row[1]), "produtos_ids": ids},
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+_MSG_MARKETING = """És o agente de **marketing** da mesma loja.
+
+Regras:
+- Baseia-te nos produtos devolvidos por `listar_produtos_para_campanha` (stock real).
+- Podes propor copy para newsletter/redes sociais em português europeu.
+- Para gravar uma proposta na base, chama `registar_campanha_marketing` com título, texto e ids dos produtos (CSV).
+- Não alteres stock nem registes vendas (isso é do agente de estoque)."""
+
+
+def build_agente_marketing():
+    return create_agent(
+        build_chat_model(temperature=0.55),
+        tools=[listar_produtos_para_campanha, registar_campanha_marketing],
+        system_prompt=SystemMessage(content=_MSG_MARKETING),
+        checkpointer=MemorySaver(),
+    )
+
+
+# --- Análise de vendas ---
+
+
+@tool
+def resumo_geral_vendas() -> str:
+    """Totais globais: número de vendas, unidades, receita."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS num_vendas,
+                           COALESCE(SUM(quantidade), 0) AS unidades,
+                           COALESCE(SUM(valor_total), 0) AS receita
+                    FROM vendas
+                    """
+                )
+                row = cur.fetchone()
+        return json.dumps(dict(row), ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def vendas_agrupadas_por_canal() -> str:
+    """Receita e número de vendas por canal."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT canal,
+                           COUNT(*) AS num_vendas,
+                           COALESCE(SUM(valor_total), 0) AS receita,
+                           COALESCE(SUM(quantidade), 0) AS unidades
+                    FROM vendas
+                    GROUP BY canal
+                    ORDER BY receita DESC
+                    """
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def top_produtos_vendidos(limite: int = 5) -> str:
+    """Ranking de produtos por unidades vendidas e receita."""
+    try:
+        n = max(1, min(int(limite), 50))
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT p.id, p.sku, p.nome,
+                           SUM(v.quantidade) AS unidades_vendidas,
+                           SUM(v.valor_total) AS receita
+                    FROM vendas v
+                    JOIN produtos p ON p.id = v.produto_id
+                    GROUP BY p.id, p.sku, p.nome
+                    ORDER BY unidades_vendidas DESC
+                    LIMIT %s
+                    """,
+                    (n,),
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def vendas_por_dia(dias: int = 14) -> str:
+    """Série diária: dia, número de vendas, receita (últimos `dias`)."""
+    try:
+        d = max(1, min(int(dias), 90))
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT date_trunc('day', data_venda)::date AS dia,
+                           COUNT(*) AS num_vendas,
+                           COALESCE(SUM(valor_total), 0) AS receita
+                    FROM vendas
+                    WHERE data_venda >= NOW() - (%s || ' days')::interval
+                    GROUP BY 1
+                    ORDER BY 1 ASC
+                    """,
+                    (d,),
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+_MSG_ANALISE = """És o agente de **análise de dados** de vendas.
+
+Regras:
+- Usa as ferramentas para ler agregações na base PostgreSQL.
+- Extrai **insights** acionáveis (tendência, canal forte, produto campeão, riscos de stock-out).
+- Não inventes números: cita sempre o que veio das ferramentas.
+- Responde em português europeu com bullets curtos e um parágrafo final de conclusão."""
+
+
+def build_agente_analise():
+    return create_agent(
+        build_chat_model(temperature=0.2),
+        tools=[
+            resumo_geral_vendas,
+            vendas_agrupadas_por_canal,
+            top_produtos_vendidos,
+            vendas_por_dia,
+            listar_produtos_em_estoque,
+        ],
+        system_prompt=SystemMessage(content=_MSG_ANALISE),
+        checkpointer=MemorySaver(),
+    )
+
+
+def executar_turno(graph, mensagem: str, thread_id: str) -> str:
+    """Um turno humano → assistente (última mensagem AI)."""
+    cfg: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    out = graph.invoke({"messages": [HumanMessage(content=mensagem)]}, cfg)
+    msgs = out.get("messages") or []
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage):
+            c = m.content
+            return c if isinstance(c, str) else str(c)
+    return "(sem resposta do modelo)"
+
+
+================================================================================
+# FICHEIRO: exercicio_15_sem_ecra.ipynb
+================================================================================
+
+# --- Célula 0 (markdown) ---
+# # Exercício 15 — três agentes de vendas (sem ecrã)
+# 
+# - **Agente 1 — Estoque:** consulta PostgreSQL, ajusta stock, regista vendas.
+# - **Agente 2 — Marketing:** lê produtos com stock e pode **gravar** rascunhos de campanha na tabela `campanhas_marketing`.
+# - **Agente 3 — Análise:** agrega vendas (canais, ranking, série diária) e produz **insights**.
+# 
+# **Docker:** nesta pasta, `./run.sh`. LLM: **DeepSeek** (`DEEPSEEK_API_KEY` no `.env` na raiz). Base: **PostgreSQL** no serviço `db` (no host, porta predefinida **5435**).
+
+# --- Célula 1 (código) ---
+from agentes_vendas import (
+    build_agente_analise,
+    build_agente_estoque,
+    build_agente_marketing,
+    executar_turno,
+)
+
+agente_estoque = build_agente_estoque()
+agente_marketing = build_agente_marketing()
+agente_analise = build_agente_analise()
+print("Três agentes prontos (estoque, marketing, análise).")
+
+# --- Célula 2 (código) ---
+print("--- Agente ESTOQUE ---")
+print(
+    executar_turno(
+        agente_estoque,
+        "Lista os produtos com stock positivo e indica qual tem menos unidades disponíveis.",
+        "demo-estoque-1",
+    )
+)
+
+# --- Célula 3 (código) ---
+print("--- Agente MARKETING ---")
+print(
+    executar_turno(
+        agente_marketing,
+        "Com base nos produtos em stock, escreve uma campanha curta (2–3 frases) e regista-a com o título 'Promo Demo Curso' e os ids dos produtos em stock no campo CSV.",
+        "demo-mkt-1",
+    )
+)
+
+# --- Célula 4 (código) ---
+print("--- Agente ANÁLISE ---")
+print(
+    executar_turno(
+        agente_analise,
+        "Usa as ferramentas de vendas e stock. Entrega: (1) totais (2) melhor canal (3) top 3 produtos (4) um insight de risco de rutura de stock.",
+        "demo-analise-1",
+    )
+)

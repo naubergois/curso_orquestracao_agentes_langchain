@@ -185,3 +185,20 @@ imprimir_thread(g, thread_id)
 # Segunda pergunta no mesmo thread (memória do grafo).
 invocar_agente(g, "E quanto dá 2**10?", thread_id)
 imprimir_thread(g, thread_id)
+
+# --- Célula 5 (código) ---
+# Segunda pergunta no mesmo thread (memória do grafo).
+invocar_agente(g, "E quanto dá dois mais três?", thread_id)
+imprimir_thread(g, thread_id)
+
+# --- Célula 6 (código) ---
+# Segunda pergunta no mesmo thread (memória do grafo).
+invocar_agente(g, "Multiplicar a operacao anterior por dois?", thread_id)
+imprimir_thread(g, thread_id)
+
+# --- Célula 7 (código) ---
+# Segunda pergunta no mesmo thread (memória do grafo).
+invocar_agente(g, "oque é o rantavirus?", thread_id)
+imprimir_thread(g, thread_id)
+
+# --- Célula 8 (código) ---

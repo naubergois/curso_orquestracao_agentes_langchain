@@ -23,7 +23,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $EnvFile = Join-Path $RepoRoot '.env'
 if (-not (Test-Path -LiteralPath $EnvFile)) {
-    Write-Warning "Crie $EnvFile com GOOGLE_API_KEY."
+    Write-Warning "Crie $EnvFile com DEEPSEEK_API_KEY."
 }
 
 $nb = $env:EX01_NOTEBOOK.Replace(' ', '%20')
@@ -33,7 +33,7 @@ Stop-OtherExerciseDocker -CurrentExerciseDirectory $ScriptDir
 Set-Location $ScriptDir
 
 Write-Host ''
-Write-Host '  Jupyter Lab — ex. 1 sem ecra (sem token)'
+Write-Host '  Jupyter Lab — ex. 1 sem ecra (DeepSeek; sem token)'
 Write-Host "  URL:  $labUrl"
 Write-Host ''
 

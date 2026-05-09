@@ -813,3 +813,7 @@ hum = HumanMessage(
 )
 out = llm.invoke([sys, hum])
 print(out.content)
+
+# --- Célula 12 (código) ---
+# --- Célula 13 (código) ---
+# --- Célula 14 (código) ---

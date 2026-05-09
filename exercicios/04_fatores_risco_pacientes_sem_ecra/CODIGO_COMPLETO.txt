@@ -112,7 +112,7 @@ def _ensure_pacientes_schema() -> None:
 _ensure_pacientes_schema()
 
 
-_MS = """És um assistente de **estudo** em português europeu. Dados fictícios em PostgreSQL (curso).
+_MS = """És um assistente de **estudo** em português brasil. Dados fictícios em PostgreSQL (curso).
 
 Regras:
 - Usa sempre `listar_pacientes` e/ou `obter_ficha_paciente` para dados reais; não inventes valores clínicos.
@@ -290,3 +290,15 @@ invocar_agente(g, mensagem_analise_um_paciente(2), thread_id)
 imprimir_thread(g, thread_id)
 
 # --- Célula 3 (código) ---
+thread_id = "demo-deepseek"
+g = build_graph()
+invocar_agente(g, " analise cinco pacientes da base", thread_id)
+imprimir_thread(g, thread_id)
+
+# --- Célula 4 (código) ---
+thread_id = "demo-deepseek"
+g = build_graph()
+invocar_agente(g, " selecione pacientes com diabetes", thread_id)
+imprimir_thread(g, thread_id)
+
+# --- Célula 5 (código) ---

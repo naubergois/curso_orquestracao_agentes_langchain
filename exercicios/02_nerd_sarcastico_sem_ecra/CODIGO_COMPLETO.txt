@@ -42,7 +42,9 @@ nome_modelo = (
 ).strip() or "gemini-2.0-flash"
 if nome_modelo.removeprefix("models/").startswith("gemini-1.5"):
     print("Aviso: `gemini-1.5*` → `gemini-2.0-flash`.", file=sys.stderr, flush=True)
-    nome_modelo = "gemini-2.0-flash"
+
+
+nome_modelo = "gemini-2.5-flash"
 
 temp = float(
     os.environ.get("NERD_SARCASTICO_TEMPERATURE")
@@ -71,3 +73,5 @@ print(texto, flush=True)
 pergunta2 = "Qual é o teu filme de sci-fi preferido e porquê?"
 res = llm.invoke([SystemMessage(content=PERSONA), HumanMessage(content=pergunta2)])
 print(res.content if isinstance(res.content, str) else str(res.content), flush=True)
+
+# --- Célula 4 (código) ---

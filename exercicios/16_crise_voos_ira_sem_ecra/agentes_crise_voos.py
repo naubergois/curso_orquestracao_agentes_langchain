@@ -1,0 +1,453 @@
+"""Exercício 16 — crise aeronáutica simulada (Irão): marketing, remarcação e riscos (DeepSeek + PostgreSQL)."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import psycopg2
+from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from psycopg2.extras import RealDictCursor
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for directory in (here.parent, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            return
+
+
+_load_local_env()
+
+_DEFAULT_MODEL = "deepseek-chat"
+
+
+def _database_url() -> str:
+    url = (os.environ.get("DATABASE_URL") or "").strip()
+    if url:
+        return url
+    return "postgresql://curso:curso@127.0.0.1:5436/crise_voos_demo"
+
+
+def _connect():
+    return psycopg2.connect(_database_url(), connect_timeout=10)
+
+
+def _ensure_deepseek_key() -> None:
+    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError(
+            "Defina DEEPSEEK_API_KEY no `.env` na raiz do repositório (exercício 16)."
+        )
+
+
+def build_chat_model(*, temperature: float = 0.25) -> ChatOpenAI:
+    _ensure_deepseek_key()
+    model = (os.environ.get("DEEPSEEK_MODEL") or _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    base_url = (os.environ.get("DEEPSEEK_API_BASE") or "https://api.deepseek.com").strip().rstrip("/")
+    return ChatOpenAI(
+        model=model,
+        api_key=os.environ["DEEPSEEK_API_KEY"].strip(),
+        base_url=base_url,
+        temperature=temperature,
+    )
+
+
+# --- Marketing ---
+
+
+@tool
+def listar_voos_cancelados() -> str:
+    """Lista voos cancelados com motivo, rota e hora prevista."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT v.id, v.numero, v.origem_iata, v.destino_iata, v.partida_prevista,
+                           v.estado, v.motivo_cancelamento
+                    FROM voos v
+                    WHERE v.estado = 'cancelado'
+                    ORDER BY v.partida_prevista ASC
+                    """
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def contagem_passageiros_afetados() -> str:
+    """Conta reservas confirmadas em voos cancelados."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)::int AS reservas_afetadas
+                    FROM reservas r
+                    JOIN voos v ON v.id = r.voo_id
+                    WHERE r.estado = 'confirmada' AND v.estado = 'cancelado'
+                    """
+                )
+                row = cur.fetchone()
+        return json.dumps(dict(row), ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def registar_campanha_comunicacao(titulo: str, corpo: str, publico_alvo: str) -> str:
+    """Grava rascunho de comunicação (email/app/redes) na base."""
+    try:
+        titulo = (titulo or "").strip()
+        corpo = (corpo or "").strip()
+        publico_alvo = (publico_alvo or "passageiros afetados").strip()
+        if not titulo or not corpo:
+            return json.dumps({"erro": "titulo e corpo são obrigatórios."}, ensure_ascii=False)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO campanhas_comunicacao (titulo, corpo, publico_alvo)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, criado_em
+                    """,
+                    (titulo, corpo, publico_alvo),
+                )
+                row = cur.fetchone()
+                conn.commit()
+        return json.dumps(
+            {"ok": True, "campanha_id": int(row[0]), "criado_em": str(row[1])},
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+_MSG_MARKETING = """És o agente de **comunicação e marketing** de uma companhia fictícia (DemoAir) durante uma **crise operacional simulada**.
+
+Regras:
+- Usa as ferramentas para ler voos cancelados e contagens reais da base PostgreSQL.
+- Tom: empático, claro, sem alarmismo; indica que o cenário é **simulação educativa** quando fizer sentido.
+- Para gravar mensagens aprovadas para envio, usa `registar_campanha_comunicacao`.
+- Não inventes números de voos ou datas: cita o que vier das ferramentas.
+- Responde em português brasileiro."""
+
+
+def build_agente_marketing_crise():
+    return create_agent(
+        build_chat_model(temperature=0.45),
+        tools=[listar_voos_cancelados, contagem_passageiros_afetados, registar_campanha_comunicacao],
+        system_prompt=SystemMessage(content=_MSG_MARKETING),
+        checkpointer=MemorySaver(),
+    )
+
+
+# --- Remarcação ---
+
+
+@tool
+def listar_reservas_afetadas() -> str:
+    """Reservas confirmadas cujo voo está cancelado (precisam de opção de remarcação)."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT r.id AS reserva_id, r.pnr, r.nome_passageiro, r.estado AS estado_reserva,
+                           v.id AS voo_id, v.numero, v.origem_iata, v.destino_iata, v.partida_prevista,
+                           v.motivo_cancelamento
+                    FROM reservas r
+                    JOIN voos v ON v.id = r.voo_id
+                    WHERE r.estado = 'confirmada' AND v.estado = 'cancelado'
+                    ORDER BY r.id ASC
+                    """
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def listar_alternativas_remarcacao(destino_iata: str) -> str:
+    """Voos programados com o mesmo destino IATA (ex.: LHR) e lugares disponíveis."""
+    try:
+        dest = (destino_iata or "").strip().upper()[:3]
+        if len(dest) != 3:
+            return json.dumps({"erro": "destino_iata deve ter 3 letras."}, ensure_ascii=False)
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, numero, origem_iata, destino_iata, partida_prevista,
+                           estado, lugares_disponiveis
+                    FROM voos
+                    WHERE estado = 'programado' AND destino_iata = %s AND lugares_disponiveis > 0
+                    ORDER BY partida_prevista ASC
+                    """,
+                    (dest,),
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def remarcar_reserva(reserva_id: int, novo_voo_id: int) -> str:
+    """Move uma reserva confirmada de voo cancelado para um voo programado com o mesmo destino."""
+    try:
+        rid = int(reserva_id)
+        nid = int(novo_voo_id)
+        with _connect() as conn:
+            conn.autocommit = False
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT r.id, r.estado, v.estado AS voo_estado, v.destino_iata AS dest_orig
+                        FROM reservas r
+                        JOIN voos v ON v.id = r.voo_id
+                        WHERE r.id = %s
+                        FOR UPDATE
+                        """,
+                        (rid,),
+                    )
+                    rr = cur.fetchone()
+                    if not rr:
+                        conn.rollback()
+                        return json.dumps({"erro": "Reserva inexistente."}, ensure_ascii=False)
+                    if rr["estado"] != "confirmada":
+                        conn.rollback()
+                        return json.dumps(
+                            {"erro": "Só é possível remarcar reservas em estado confirmada.", "estado": rr["estado"]},
+                            ensure_ascii=False,
+                        )
+                    if rr["voo_estado"] != "cancelado":
+                        conn.rollback()
+                        return json.dumps(
+                            {"erro": "O voo original não está cancelado; verifique o processo."},
+                            ensure_ascii=False,
+                        )
+                    destino = str(rr["dest_orig"])
+
+                    cur.execute(
+                        "SELECT id, estado, destino_iata, lugares_disponiveis FROM voos WHERE id = %s FOR UPDATE",
+                        (nid,),
+                    )
+                    nv = cur.fetchone()
+                    if not nv:
+                        conn.rollback()
+                        return json.dumps({"erro": "Novo voo inexistente."}, ensure_ascii=False)
+                    if nv["estado"] != "programado" or int(nv["lugares_disponiveis"] or 0) < 1:
+                        conn.rollback()
+                        return json.dumps({"erro": "Novo voo indisponível ou sem lugares."}, ensure_ascii=False)
+                    if str(nv["destino_iata"]) != destino:
+                        conn.rollback()
+                        return json.dumps(
+                            {
+                                "erro": "O novo voo deve ter o mesmo destino que o voo cancelado.",
+                                "destino_esperado": destino,
+                                "destino_novo_voo": str(nv["destino_iata"]),
+                            },
+                            ensure_ascii=False,
+                        )
+
+                    cur.execute(
+                        """
+                        UPDATE voos SET lugares_disponiveis = lugares_disponiveis - 1
+                        WHERE id = %s AND lugares_disponiveis >= 1
+                        RETURNING lugares_disponiveis
+                        """,
+                        (nid,),
+                    )
+                    up = cur.fetchone()
+                    if not up:
+                        conn.rollback()
+                        return json.dumps({"erro": "Sem lugares no novo voo."}, ensure_ascii=False)
+                    restantes = int(up["lugares_disponiveis"])
+
+                    cur.execute(
+                        """
+                        UPDATE reservas
+                        SET estado = 'remarcada', novo_voo_id = %s
+                        WHERE id = %s
+                        """,
+                        (nid, rid),
+                    )
+                conn.commit()
+                return json.dumps(
+                    {"ok": True, "reserva_id": rid, "novo_voo_id": nid, "lugares_restantes_novo_voo": restantes},
+                    ensure_ascii=False,
+                )
+            except Exception:
+                conn.rollback()
+                raise
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+_MSG_REMARCACAO = """És o agente de **remarcação e operações comerciais** da DemoAir (simulação).
+
+Regras:
+- Usa sempre as ferramentas para consultar reservas afetadas e alternativas.
+- Só remarca com `remarcar_reserva` quando o novo voo tiver o **mesmo destino** que o voo cancelado e lugares disponíveis.
+- Explica ao passageiro (em português europeu) de forma breve o que mudou.
+- Não inventes PNR nem horários: usa apenas dados devolvidos pela base."""
+
+
+def build_agente_remarcacao():
+    return create_agent(
+        build_chat_model(temperature=0.2),
+        tools=[listar_reservas_afetadas, listar_alternativas_remarcacao, remarcar_reserva],
+        system_prompt=SystemMessage(content=_MSG_REMARCACAO),
+        checkpointer=MemorySaver(),
+    )
+
+
+# --- Riscos e crises ---
+
+
+@tool
+def resumo_operacional_crise() -> str:
+    """Resumo: voos cancelados, programados, reservas ainda confirmadas em voos cancelados."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM voos WHERE estado = 'cancelado')::int AS voos_cancelados,
+                      (SELECT COUNT(*) FROM voos WHERE estado = 'programado')::int AS voos_programados,
+                      (SELECT COUNT(*) FROM reservas r JOIN voos v ON v.id = r.voo_id
+                       WHERE r.estado = 'confirmada' AND v.estado = 'cancelado')::int AS reservas_pendentes
+                    """
+                )
+                row = cur.fetchone()
+        return json.dumps(dict(row), ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def listar_exposicao_rotas_ira() -> str:
+    """Voos (cancelados ou não) com origem ou destino IKA (simulação de exposição à região)."""
+    try:
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, numero, origem_iata, destino_iata, partida_prevista, estado, motivo_cancelamento
+                    FROM voos
+                    WHERE origem_iata = 'IKA' OR destino_iata = 'IKA'
+                    ORDER BY partida_prevista ASC
+                    """
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def registar_avaliacao_risco(tipo: str, descricao: str, severidade_1_a_5: int, recomendacao: str) -> str:
+    """Regista uma linha de avaliação de risco / plano de mitigação."""
+    try:
+        tipo = (tipo or "").strip()
+        descricao = (descricao or "").strip()
+        recomendacao = (recomendacao or "").strip()
+        sev = int(severidade_1_a_5)
+        if sev < 1 or sev > 5:
+            return json.dumps({"erro": "severidade deve ser entre 1 e 5."}, ensure_ascii=False)
+        if not tipo or not descricao or not recomendacao:
+            return json.dumps({"erro": "tipo, descricao e recomendacao são obrigatórios."}, ensure_ascii=False)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO avaliacoes_risco (tipo, descricao, severidade, recomendacao)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, criado_em
+                    """,
+                    (tipo, descricao, sev, recomendacao),
+                )
+                row = cur.fetchone()
+                conn.commit()
+        return json.dumps(
+            {"ok": True, "avaliacao_id": int(row[0]), "criado_em": str(row[1])},
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+@tool
+def listar_avaliacoes_risco_recentes(limite: int = 10) -> str:
+    """Últimas avaliações de risco registadas."""
+    try:
+        n = max(1, min(int(limite), 50))
+        with _connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, tipo, descricao, severidade, recomendacao, criado_em
+                    FROM avaliacoes_risco
+                    ORDER BY criado_em DESC
+                    LIMIT %s
+                    """,
+                    (n,),
+                )
+                rows = cur.fetchall()
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except Exception as e:
+        return f"Erro: {e}"
+
+
+_MSG_RISCO = """És o agente de **gestão de risco e crise** da DemoAir (simulação educativa).
+
+Regras:
+- Usa as ferramentas para ler o estado operacional e a exposição a rotas IKA.
+- Classifica riscos de forma profissional (operacional, reputacional, regulatório, segurança da informação).
+- Para formalizar uma decisão ou plano, usa `registar_avaliacao_risco` com severidade 1–5.
+- Não cries alarme geopolítico real: tudo é **cenário fictício** para o curso.
+- Responde em português europeu com bullets e recomendações acionáveis."""
+
+
+def build_agente_risco_crise():
+    return create_agent(
+        build_chat_model(temperature=0.22),
+        tools=[
+            resumo_operacional_crise,
+            listar_exposicao_rotas_ira,
+            registar_avaliacao_risco,
+            listar_avaliacoes_risco_recentes,
+        ],
+        system_prompt=SystemMessage(content=_MSG_RISCO),
+        checkpointer=MemorySaver(),
+    )
+
+
+def executar_turno(graph, mensagem: str, thread_id: str) -> str:
+    """Um turno humano → última mensagem do assistente."""
+    cfg: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    out = graph.invoke({"messages": [HumanMessage(content=mensagem)]}, cfg)
+    msgs = out.get("messages") or []
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage):
+            c = m.content
+            return c if isinstance(c, str) else str(c)
+    return "(sem resposta do modelo)"

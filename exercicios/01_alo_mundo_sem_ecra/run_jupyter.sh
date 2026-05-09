@@ -4,10 +4,26 @@ set -euo pipefail
 # Exercício 1 — sem ecrã (Jupyter no Docker).
 #   EX01_NOTEBOOK=outro.ipynb   → ficheiro a abrir no Lab
 #   OPEN_JUPYTER_BROWSER=0      → não abre o browser
+#   ./run.sh --no-cache [-d]    → rebuild completo da imagem Jupyter antes do up
 
 export JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 OPEN_JUPYTER_BROWSER="${OPEN_JUPYTER_BROWSER:-1}"
 EX01_NOTEBOOK="${EX01_NOTEBOOK:-exercicio_1_sem_ecra.ipynb}"
+
+compose_up_args=()
+no_cache_build=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-cache)
+      no_cache_build=true
+      shift
+      ;;
+    *)
+      compose_up_args+=("$1")
+      shift
+      ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -21,7 +37,7 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-[[ -f "${REPO_ROOT}/.env" ]] || echo "Aviso: crie ${REPO_ROOT}/.env com GOOGLE_API_KEY." >&2
+[[ -f "${REPO_ROOT}/.env" ]] || echo "Aviso: crie ${REPO_ROOT}/.env com DEEPSEEK_API_KEY." >&2
 ENV_FILE="${REPO_ROOT}/.env"
 compose_env=()
 [[ -f "${ENV_FILE}" ]] && compose_env+=(--env-file "${ENV_FILE}")
@@ -38,7 +54,7 @@ cd "${SCRIPT_DIR}"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Jupyter Lab — ex. 1 sem ecrã (sem token: só localhost)"
+echo "  Jupyter Lab — ex. 1 sem ecrã (DeepSeek; sem token: só localhost)"
 echo "  URL:  ${LAB_URL}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Parar: cd \"${SCRIPT_DIR}\" && docker compose -f docker-compose.jupyter.yml down"
@@ -56,4 +72,9 @@ _abrir_browser() {
 
 ( sleep 7 && _abrir_browser "${LAB_URL}" ) &
 
-docker compose "${compose_env[@]}" -f docker-compose.jupyter.yml up --build "$@"
+up_extra=(--build)
+if [[ "${no_cache_build}" == true ]]; then
+  docker compose "${compose_env[@]}" -f docker-compose.jupyter.yml build --no-cache jupyter
+  up_extra=(--no-build)
+fi
+exec docker compose "${compose_env[@]}" -f docker-compose.jupyter.yml up "${up_extra[@]}" "${compose_up_args[@]}"

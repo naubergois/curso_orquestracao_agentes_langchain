@@ -1,0 +1,53 @@
+CONTRATO DE PRESTACAO DE SERVICOS TECNICOS
+
+Pelo presente instrumento particular, de um lado:
+
+CONTRATANTE: Alfa Industria de Equipamentos Ltda., pessoa juridica de direito privado,
+inscrita no CNPJ sob o n. 12.345.678/0001-90, com sede na Rua das Palmeiras, 1200,
+Sao Paulo/SP, CEP 01000-000, neste ato representada por Maria Helena Costa,
+Diretora de Operacoes.
+
+E, de outro lado:
+
+CONTRATADA: SoluData Tecnologia S.A., pessoa juridica de direito privado,
+inscrita no CNPJ sob o n. 98.765.432/0001-10, com sede na Avenida Central, 450,
+Belo Horizonte/MG, CEP 30000-000, neste ato representada por Diego Martins,
+Diretor Executivo.
+
+As partes resolvem celebrar o presente Contrato de Prestacao de Servicos Tecnicos,
+que se regera pelas clausulas e condicoes seguintes:
+
+1. OBJETO
+1.1. A CONTRATADA prestara servicos de manutencao, monitorizacao e suporte
+especializado para a infraestrutura de dados da CONTRATANTE, incluindo ate 3
+intervencoes presenciais por mes.
+
+2. PRAZO
+2.1. O presente contrato tera vigencia de 12 (doze) meses, com inicio em 01/06/2026
+e termino em 31/05/2027, podendo ser renovado por acordo escrito entre as partes.
+
+3. PRECO E FORMA DE PAGAMENTO
+3.1. Pela execucao dos servicos, a CONTRATANTE pagara a CONTRATADA o valor mensal
+de R$ 18.500,00 (dezoito mil e quinhentos reais), mediante emissao de nota fiscal.
+3.2. O pagamento ocorrera em ate 10 (dez) dias corridos apos o recebimento da nota fiscal.
+3.3. Em caso de atraso, incidira multa moratoria de 2% sobre a parcela em atraso,
+alem de juros de 1% ao mes, pro rata die.
+
+4. OBRIGACOES DA CONTRATADA
+4.1. Executar os servicos com qualidade tecnica e em conformidade com boas praticas de mercado.
+4.2. Manter sigilo sobre informacoes confidenciais da CONTRATANTE.
+4.3. Substituir, sem custos adicionais, quaisquer entregas em desconformidade.
+
+5. OBRIGACOES DA CONTRATANTE
+5.1. Fornecer acesso aos sistemas e informacoes necessarias a prestacao dos servicos.
+5.2. Efetuar os pagamentos nos prazos estipulados.
+
+6. RESCISAO
+6.1. O contrato podera ser rescindido por qualquer parte, mediante aviso previo escrito
+de 30 (trinta) dias.
+6.2. O descumprimento de obrigacoes essenciais autoriza a parte adimplente a rescindir
+o contrato imediatamente, sem prejuizo de perdas e danos.
+
+7. FORO
+7.1. Fica eleito o foro da Comarca de Sao Paulo/SP para dirimir quaisquer controversias
+oriundas deste contrato, com renuncia de qualquer outro, por mais privilegiado que seja.

@@ -2,12 +2,30 @@
 set -euo pipefail
 
 # Exercício 2 — sem ecrã (Jupyter no Docker).
+#   Para cada pasta em `exercicios/*/`, faz `docker compose down` antes do up (exceto esta).
+#   Stacks Docker fora de `exercicios/` (ex.: empresas-automatizadas-ia) não são parados — usar outra porta: JUPYTER_PORT=8890 ./run.sh
 #   EX02_NOTEBOOK=outro.ipynb
 #   OPEN_JUPYTER_BROWSER=0
 
 export JUPYTER_PORT="${JUPYTER_PORT:-8888}"
 OPEN_JUPYTER_BROWSER="${OPEN_JUPYTER_BROWSER:-1}"
 EX02_NOTEBOOK="${EX02_NOTEBOOK:-exercicio_2_sem_ecra.ipynb}"
+
+# Opcional: ./run.sh --no-cache [-d]  →  docker compose build --no-cache antes do up
+compose_up_args=()
+no_cache_build=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-cache)
+      no_cache_build=true
+      shift
+      ;;
+    *)
+      compose_up_args+=("$1")
+      shift
+      ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -56,4 +74,9 @@ _abrir_browser() {
 
 ( sleep 7 && _abrir_browser "${LAB_URL}" ) &
 
-docker compose "${compose_env[@]}" -f docker-compose.jupyter.yml up --build "$@"
+up_extra=(--build)
+if [[ "${no_cache_build}" == true ]]; then
+  docker compose "${compose_env[@]}" -f docker-compose.jupyter.yml build --no-cache jupyter
+  up_extra=(--no-build)
+fi
+exec docker compose "${compose_env[@]}" -f docker-compose.jupyter.yml up "${up_extra[@]}" "${compose_up_args[@]}"
