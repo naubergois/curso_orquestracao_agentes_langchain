@@ -1,0 +1,11 @@
+# Jupyter — ex. 19 sem ecrã (chat + resumos por utilizador em PostgreSQL).
+FROM quay.io/jupyter/minimal-notebook:latest
+
+USER root
+COPY requirements.txt /tmp/requirements-ex19-sem.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex19-sem.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}
