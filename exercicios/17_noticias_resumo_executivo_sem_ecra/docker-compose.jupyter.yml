@@ -1,0 +1,28 @@
+# Jupyter — ex. 17 sem ecrã (pesquisa Web + Pydantic + resumo executivo). Ver run_jupyter.sh .
+name: curso-ex17-sem-jupyter
+
+services:
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"
+    env_file:
+      - ../../.env
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX17: ${GEMINI_MODEL_EX17:-}
+      PYTHONUNBUFFERED: "1"
+      JUPYTER_TOKEN: ""
+    volumes:
+      - ../../:/home/jovyan/work/repo:rw
+      - ../../.env:/home/jovyan/work/repo/.env:ro
+    working_dir: /home/jovyan/work/repo/exercicios/17_noticias_resumo_executivo_sem_ecra
+    command:
+      - start-notebook.sh
+      - --ServerApp.token=
+      - --ServerApp.password=
+      - --ServerApp.ip=0.0.0.0
