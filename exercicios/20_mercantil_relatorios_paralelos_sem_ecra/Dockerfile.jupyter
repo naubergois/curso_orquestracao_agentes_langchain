@@ -1,0 +1,11 @@
+# Jupyter — ex. 20 sem ecrã (mercantil + LCEL paralelo + Pydantic). Ver run_jupyter.sh .
+FROM quay.io/jupyter/minimal-notebook:latest
+
+USER root
+COPY requirements.txt /tmp/requirements-ex20-sem.txt
+RUN pip install --no-cache-dir --upgrade pip \
+  && pip install --no-cache-dir -r /tmp/requirements-ex20-sem.txt \
+  && fix-permissions "${CONDA_DIR}" \
+  && fix-permissions "/home/${NB_USER}"
+
+USER ${NB_UID}
