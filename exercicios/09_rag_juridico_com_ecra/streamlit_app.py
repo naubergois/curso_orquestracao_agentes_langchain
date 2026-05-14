@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+# `lib_llm_fallback.py` e outros utilitários partilhados vivem em `exercicios/`.
+sys.path.insert(0, str(HERE.parent))
 for _extra in (HERE / "sem_ecra", HERE.parent / "09_rag_juridico_sem_ecra"):
     if _extra.is_dir():
         sys.path.insert(0, str(_extra))
@@ -88,8 +90,9 @@ with st.sidebar:
                 limpar_chroma=True,
                 fonte_pdfs=fonte,
             )
-        st.success("Concluído.")
+        st.success("Concluído. A actualizar a página…")
         st.cache_resource.clear()
+        st.rerun()
 
     from ingest_rag import listar_factories_embeddings
 
@@ -109,25 +112,28 @@ if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
     )
 
 persist = _persist_chroma()
-if not persist.is_dir() or not any(persist.iterdir()):
-    st.info(
-        f"Ainda não há Chroma em `{persist}`. Use **Regenerar PDFs e reindexar Chroma** na barra lateral."
+chroma_pronto = persist.is_dir() and any(persist.iterdir())
+if not chroma_pronto:
+    st.warning(
+        f"Ainda não há índice Chroma em `{persist}`. "
+        "Use **Regenerar PDFs e reindexar Chroma** na barra lateral (a primeira ingestão pode demorar). "
+        "Depois pode fazer perguntas RAG abaixo."
     )
-    st.stop()
 
-pergunta_teste = st.text_input("Pergunta de teste ao índice (só excertos)", "O que é um negócio jurídico?")
-if pergunta_teste:
-    try:
-        from ingest_rag import carregar_vectorstore
+if chroma_pronto:
+    pergunta_teste = st.text_input("Pergunta de teste ao índice (só excertos)", "O que é um negócio jurídico?")
+    if pergunta_teste:
+        try:
+            from ingest_rag import carregar_vectorstore
 
-        _vs = carregar_vectorstore(coleccao, persist)
-        docs = _vs.similarity_search(pergunta_teste, k=4)
-        with st.expander("Documentos mais semelhantes (top‑k)"):
-            for i, d in enumerate(docs, 1):
-                st.markdown(f"**{i}.** `{d.metadata.get('source', '?')}`")
-                st.text(d.page_content[:800] + ("…" if len(d.page_content) > 800 else ""))
-    except Exception as e:
-        st.error(f"Erro ao consultar a coleção `{coleccao}`: {e}")
+            _vs = carregar_vectorstore(coleccao, persist)
+            docs = _vs.similarity_search(pergunta_teste, k=4)
+            with st.expander("Documentos mais semelhantes (top‑k)"):
+                for i, d in enumerate(docs, 1):
+                    st.markdown(f"**{i}.** `{d.metadata.get('source', '?')}`")
+                    st.text(d.page_content[:800] + ("…" if len(d.page_content) > 800 else ""))
+        except Exception as e:
+            st.error(f"Erro ao consultar a coleção `{coleccao}`: {e}")
 
 if "msgs" not in st.session_state:
     st.session_state.msgs = []
@@ -136,8 +142,14 @@ for role, text in st.session_state.msgs:
     with st.chat_message(role):
         st.markdown(text)
 
-user = st.chat_input("Pergunta ao assistente (RAG + Gemini)…")
-if user:
+if not chroma_pronto:
+    st.caption("O chat fica desactivado até existir índice Chroma — use **Regenerar PDFs e reindexar Chroma** na barra lateral.")
+
+user = st.chat_input(
+    "Pergunta ao assistente (RAG + Gemini)…",
+    disabled=not chroma_pronto,
+)
+if user and chroma_pronto:
     with st.chat_message("user"):
         st.markdown(user)
     if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):

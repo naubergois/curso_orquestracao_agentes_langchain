@@ -5,7 +5,8 @@ Coleções por defeito:
   - `juridico_gemini_001` — `GoogleGenerativeAIEmbeddings` (`gemini-embedding-001`)
   - `juridico_gemini_2` — `GoogleGenerativeAIEmbeddings` (`gemini-embedding-2-preview`; **espaço de embeddings distinto** do 001)
 
-Variáveis úteis: `FASTEMBED_MODEL`, `GEMINI_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL_ALT`,
+Variáveis úteis: `FASTEMBED_MODEL`, `FASTEMBED_CACHE_DIR` (se vazio, usa `09_rag_juridico_sem_ecra/.fastembed_cache` em disco),
+`GEMINI_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL_ALT`,
 `GEMINI_EMBEDDING_2_OUTPUT_DIMENSIONALITY`, `GEMINI_EMBEDDING_2_BATCH_SIZE` (ver `.env.example`).
 
 Uso na pasta do exercício:
@@ -15,6 +16,7 @@ Uso na pasta do exercício:
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -195,11 +197,51 @@ def _build_embeddings_fastembed() -> FastEmbedEmbeddings:
         os.environ.get("FASTEMBED_MODEL")
         or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     ).strip()
-    cache = os.environ.get("FASTEMBED_CACHE_DIR")
-    kwargs: dict = {"model_name": name}
-    if cache:
-        kwargs["cache_dir"] = cache
-    return FastEmbedEmbeddings(**kwargs)
+    # Cache estável por defeito (evita ONNX em `/var/folders/.../T/` incompleto ou apagado pelo SO).
+    cache = (os.environ.get("FASTEMBED_CACHE_DIR") or "").strip()
+    if not cache:
+        cache = str(Path(__file__).resolve().parent / ".fastembed_cache")
+    Path(cache).mkdir(parents=True, exist_ok=True)
+    return FastEmbedEmbeddings(model_name=name, cache_dir=cache)
+
+
+def limpar_dados_chroma(persist_directory: Path) -> None:
+    """Remove coleções e ficheiros Chroma **sem** apagar a pasta raiz.
+
+    Em Docker, `chroma_juridico` costuma ser um *volume* montado em `/app/sem_ecra/chroma_juridico`;
+    `shutil.rmtree` nessa raiz provoca ``OSError: [Errno 16] Device or resource busy``.
+    """
+    persist_directory = Path(persist_directory)
+    if not persist_directory.exists():
+        return
+
+    try:
+        import chromadb
+        from chromadb.config import Settings
+
+        client = chromadb.PersistentClient(
+            path=str(persist_directory),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        for col in client.list_collections():
+            try:
+                client.delete_collection(col.name)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        for child in list(persist_directory.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                try:
+                    child.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def listar_factories_embeddings() -> dict[str, Callable[[], Any]]:
@@ -233,10 +275,7 @@ def indexar_embeddings(
 
     factories = listar_factories_embeddings()
     if limpar and persist_directory.exists():
-        import shutil
-
-        shutil.rmtree(persist_directory)
-        persist_directory.mkdir(parents=True, exist_ok=True)
+        limpar_dados_chroma(persist_directory)
 
     criadas: list[str] = []
     for collection_name, factory in factories.items():
