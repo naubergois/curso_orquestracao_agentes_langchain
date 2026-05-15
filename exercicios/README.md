@@ -4,7 +4,7 @@ Pastas numeradas com exercícios **com ecrã** (`…_com_ecra`, Streamlit + Dock
 
 Para um **percurso paralelo** com 20 cenários de empresa (mesmo `.env` na raiz, Jupyter por defeito), vê [`../empresas-automatizadas-ia/README.md`](../empresas-automatizadas-ia/README.md).
 
-- **Gemini (Google AI):** exercícios **00–03** e **05–11** e **13** e **17–21** (excepto o **04** e o **12**) — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
+- **Gemini (Google AI):** exercícios **00–03** e **05–11** e **13** e **17–22** (excepto o **04** e o **12**) — variável **`GOOGLE_API_KEY`** e, consoante o exercício, **`GEMINI_MODEL`** ou `GEMINI_MODEL_EXNN` (ver `.env.example`).
 - **DeepSeek:** exercício **04** — **`DEEPSEEK_API_KEY`**, `DEEPSEEK_MODEL`, `DEEPSEEK_MODEL_FALLBACKS` (CSV, opcional), `DEEPSEEK_API_BASE`; o compose define `DATABASE_URL` para o PostgreSQL no contentor.
 - **Ex. 05 (só Jupyter):** LCEL e *prompt templates* — opcional **`GEMINI_MODEL_EX05`**, senão **`GEMINI_MODEL`**; **`GEMINI_MODEL_FALLBACKS`** opcional (ver GUIA §9.2).
 - **Ex. 06 (só Jupyter):** memória / histórico — `RunnableWithMessageHistory`, lista manual, `trim_messages`; opcional **`GEMINI_MODEL_EX06`**.
@@ -65,6 +65,7 @@ Para um **percurso paralelo** com 20 cenários de empresa (mesmo `.env` na raiz,
 | **19** | `19_resumo_chat_por_utilizador_sem_ecra` | **Resumo de chat por utilizador** em **PostgreSQL** (`resumo_acumulado` + `sessoes_chat`); ao abrir **nova sessão**, injecta o resumo na BD como **`SystemMessage`**. LangGraph `MemorySaver` para o histórico **dentro** da sessão. **`GOOGLE_API_KEY`**; Postgres no compose (`POSTGRES_PORT` predef. **5437**); opcional **`GEMINI_MODEL_EX19`**. **Só Jupyter.** |
 | **20** | `20_mercantil_relatorios_paralelos_sem_ecra` | **Mercantil** simulado (compras + vendas); **`RunnableParallel`** gera **`RelatorioEstoque`** e **`RelatorioLucroVendas`** (Pydantic). **Agente ReAct** (LangGraph + Gemini) com *tools* JSON para **análise** de stock e vendas/lucro. Secção opcional: sínteses paralelas com `with_structured_output`. **`GOOGLE_API_KEY`** para agente/opcional; **`GEMINI_MODEL_EX20`**. **Só Jupyter.** |
 | **21** | `21_agente_marketing_produto_estrela_sem_ecra` | **Agente de marketing** (ReAct + Gemini): *tools* com ranking de vendas, **produto mais vendido em unidades**, ficha por SKU e contexto de marca; plano de **campanha** (4 semanas, canais, KPIs). Dados fictícios em `dados_vendas_demo.py`. **`GOOGLE_API_KEY`**; opcional **`GEMINI_MODEL_EX21`**. **Só Jupyter.** |
+| **22** | `22_noticias_faiss_rag_diario_sem_ecra` | **Dois agentes ReAct:** recolha de **notícias** (DuckDuckGo) + indexação **FAISS** (embeddings Gemini); segundo agente com **RAG** (`similarity_search`) para **análises** só sobre o índice. **`GOOGLE_API_KEY`**, **rede**; opcional **`GEMINI_MODEL_EX22`** / **`GEMINI_EMBEDDING_MODEL`**. **Só Jupyter** (`./run.sh`) ou **Google Colab** (`exercicio_22_colab.ipynb`, gerado por `gerar_exercicio_22_colab_ipynb.py`). |
 
 **Legenda:** *com ecrã* → Streamlit + `docker-compose.yml`; *sem ecrã* → Jupyter + `docker-compose.jupyter.yml` (quando existir par, o tema é o mesmo; muda só a interface).
 

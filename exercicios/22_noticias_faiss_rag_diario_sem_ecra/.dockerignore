@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.venv
+venv
+.git
+.env
+.ipynb_checkpoints
+faiss_noticias_index

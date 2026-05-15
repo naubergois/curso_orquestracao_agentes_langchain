@@ -1,0 +1,380 @@
+# === faiss_noticias.py ===
+"""Pesquisa Web (DuckDuckGo) + indexação FAISS para notícias do dia."""
+
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for d in (here.parent, *here.parents):
+        env = d / ".env"
+        if env.is_file():
+            load_dotenv(env, override=False)
+            return
+
+
+_load_local_env()
+
+# Último texto bruto da pesquisa (o agente de recolha preenche; o de indexação lê).
+_ultima_pesquisa_bruta: str = ""
+_ultima_consulta: str = ""
+
+
+def ultima_pesquisa_snapshot() -> tuple[str, str]:
+    return _ultima_consulta, _ultima_pesquisa_bruta
+
+
+def definir_ultima_pesquisa(consulta: str, texto_bruto: str) -> None:
+    global _ultima_pesquisa_bruta, _ultima_consulta
+    _ultima_consulta = (consulta or "").strip()
+    _ultima_pesquisa_bruta = texto_bruto or ""
+
+
+def _garantir_chave_google() -> None:
+    k = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not k:
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY para embeddings Gemini (FAISS).")
+    os.environ.setdefault("GOOGLE_API_KEY", k)
+
+
+def _norm_embedding_model(nome: str) -> str:
+    """Normaliza o nome e mapeia identificadores antigos (404 em v1beta com embedContent)."""
+    n = (nome or "").strip()
+    if n.startswith("models/"):
+        n = n.removeprefix("models/")
+    legacy = {
+        "text-embedding-004",
+        "text-embedding-004-embedding-preview",
+        "embedding-001",
+    }
+    if n in legacy:
+        return "gemini-embedding-001"
+    return n or "gemini-embedding-001"
+
+
+def embeddings_gemini() -> GoogleGenerativeAIEmbeddings:
+    _garantir_chave_google()
+    raw = (
+        os.environ.get("GEMINI_EMBEDDING_MODEL")
+        or os.environ.get("GEMINI_EMBEDDING_MODEL_004")
+        or "gemini-embedding-001"
+    ).strip()
+    modelo = _norm_embedding_model(raw)
+    return GoogleGenerativeAIEmbeddings(model=modelo)
+
+
+def pesquisa_duckduckgo_texto(consulta: str, *, max_resultados: int = 12) -> str:
+    """Invoca DuckDuckGo (langchain_community). Requer rede."""
+    from langchain_community.tools import DuckDuckGoSearchResults
+
+    q = (consulta or "").strip()
+    if not q:
+        raise ValueError("consulta vazia.")
+    search = DuckDuckGoSearchResults(max_results=max(1, min(max_resultados, 20)))
+    try:
+        raw = search.invoke(q)
+    except Exception:
+        raw = search.invoke({"query": q})
+    texto = raw if isinstance(raw, str) else str(raw)
+    definir_ultima_pesquisa(q, texto)
+    return texto
+
+
+def _fragmentos_para_documentos(texto: str, consulta: str) -> list[Document]:
+    """Parte o resultado DDG em blocos (URLs/manchetes) quando possível; senão um único documento."""
+    texto = (texto or "").strip()
+    if not texto:
+        return []
+    partes = re.split(r"\n{2,}", texto)
+    docs: list[Document] = []
+    for i, bloco in enumerate(partes):
+        b = bloco.strip()
+        if len(b) < 40:
+            continue
+        docs.append(
+            Document(
+                page_content=b[:12000],
+                metadata={"consulta": consulta, "bloco": i, "fonte": "duckduckgo"},
+            )
+        )
+    if not docs:
+        docs.append(
+            Document(
+                page_content=texto[:50000],
+                metadata={"consulta": consulta, "fonte": "duckduckgo"},
+            )
+        )
+    return docs
+
+
+def dividir_documentos(docs: list[Document]) -> list[Document]:
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=150)
+    return splitter.split_documents(docs)
+
+
+def caminho_indice_padrao() -> Path:
+    return Path(__file__).resolve().parent / "faiss_noticias_index"
+
+
+def indexar_ultima_pesquisa_em_faiss(
+    persist_directory: Path | None = None,
+    *,
+    substituir: bool = True,
+) -> int:
+    """Indexa `_ultima_pesquisa_bruta` em FAISS. Devolve número de chunks."""
+    consulta, bruto = ultima_pesquisa_snapshot()
+    if not bruto.strip():
+        raise RuntimeError(
+            "Não há pesquisa recente em memória. Chame primeiro a tool de pesquisa Web (ou `pesquisa_duckduckgo_texto`)."
+        )
+    persist_directory = persist_directory or caminho_indice_padrao()
+    persist_directory = Path(persist_directory)
+    persist_directory.mkdir(parents=True, exist_ok=True)
+
+    docs = _fragmentos_para_documentos(bruto, consulta)
+    chunks = dividir_documentos(docs)
+    if not chunks:
+        raise RuntimeError("Nenhum chunk gerado a partir da pesquisa.")
+    emb = embeddings_gemini()
+    if substituir and persist_directory.exists():
+        import shutil
+
+        for child in list(persist_directory.iterdir()):
+            if child.is_file():
+                try:
+                    child.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            elif child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+    vs = FAISS.from_documents(chunks, emb)
+    vs.save_local(str(persist_directory))
+    return len(chunks)
+
+
+def carregar_faiss(persist_directory: Path | None = None) -> FAISS:
+    persist_directory = Path(persist_directory or caminho_indice_padrao())
+    if not persist_directory.is_dir() or not any(persist_directory.iterdir()):
+        raise RuntimeError(
+            f"Índice FAISS inexistente em `{persist_directory}`. "
+            "Execute primeiro o agente de recolha (pesquisa + indexação)."
+        )
+    return FAISS.load_local(
+        str(persist_directory),
+        embeddings_gemini(),
+        allow_dangerous_deserialization=True,
+    )
+
+
+def retriever_noticias(k: int = 6, persist_directory: Path | None = None) -> Any:
+    vs = carregar_faiss(persist_directory)
+    return vs.as_retriever(search_kwargs={"k": k})
+
+# === agente_recolha_noticias.py ===
+"""Agente ReAct: pesquisa Web (DuckDuckGo) e gravação do resultado em FAISS."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+from faiss_noticias import indexar_ultima_pesquisa_em_faiss, pesquisa_duckduckgo_texto
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for directory in (here.parent, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            return
+
+
+_load_local_env()
+
+
+def _modelo() -> str:
+    return (os.environ.get("GEMINI_MODEL_EX22") or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+
+
+def _garantir_chave_api() -> None:
+    key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY no `.env` na raiz do repositório.")
+    os.environ.setdefault("GOOGLE_API_KEY", key)
+
+
+@tool
+def pesquisar_noticias_web_para_indexacao(consulta: str) -> str:
+    """Pesquisa na Web via DuckDuckGo (snippets e links). Use consultas curtas em português, ex.: «notícias Portugal hoje», «economia Europa». Requer rede."""
+    return pesquisa_duckduckgo_texto(consulta.strip())
+
+
+@tool
+def gravar_ultima_pesquisa_no_indice_faiss() -> str:
+    """Indexa em FAISS o texto da **última** pesquisa Web feita nesta sessão (substitui o índice anterior na pasta do exercício). Chame **depois** de `pesquisar_noticias_web_para_indexacao`."""
+    n = indexar_ultima_pesquisa_em_faiss(substituir=True)
+    return f"FAISS actualizado: {n} vectores (chunks) gravados."
+
+
+_SYSTEM = """És um **editor de agência** que prepara material bruto para um sistema RAG.
+
+Fluxo:
+1. Usa `pesquisar_noticias_web_para_indexacao` com **1 a 4** consultas complementares para cobrir o dia (política, economia, sociedade — conforme o pedido do utilizador).
+2. Quando tiveres trechos suficientes, chama **uma vez** `gravar_ultima_pesquisa_no_indice_faiss` para gravar **apenas a última** pesquisa em memória intermédia.
+
+**Atenção:** a tool de gravação indexa só o resultado da **última** chamada à pesquisa. Se precisares de fundir várias pesquisas num único índice, faz uma **última** pesquisa mais abrangente (ex.: «resumo notícias Portugal hoje manchetes») e grava em seguida.
+
+Regras:
+- Não inventes URLs nem factos que não apareçam nos snippets.
+- Resposta final ao utilizador: resumo curto do que foi gravado e para que temas serve o índice. Português europeu."""
+
+
+def criar_grafo_agente_recolha() -> Any:
+    _garantir_chave_api()
+    llm = ChatGoogleGenerativeAI(model=_modelo(), temperature=0.25)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", _SYSTEM),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    return create_react_agent(
+        llm,
+        tools=[pesquisar_noticias_web_para_indexacao, gravar_ultima_pesquisa_no_indice_faiss],
+        prompt=prompt,
+        checkpointer=MemorySaver(),
+    )
+
+
+def config_recolha(thread_id: str = "ex22-recolha-noticias") -> dict:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def ultima_resposta_assistente(resultado: dict) -> str:
+    msgs = resultado.get("messages") or []
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage) and (m.content or "").strip():
+            c = m.content
+            return c if isinstance(c, str) else str(c)
+    return ""
+
+# === agente_analista_noticias_rag.py ===
+"""Agente ReAct: conversa sobre notícias indexadas (RAG sobre FAISS)."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+from faiss_noticias import carregar_faiss
+
+
+def _load_local_env() -> None:
+    here = Path(__file__).resolve()
+    for directory in (here.parent, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            return
+
+
+_load_local_env()
+
+
+def _modelo() -> str:
+    return (os.environ.get("GEMINI_MODEL_EX22") or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+
+
+def _garantir_chave_api() -> None:
+    key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY no `.env` na raiz do repositório.")
+    os.environ.setdefault("GOOGLE_API_KEY", key)
+
+
+@tool
+def consultar_indice_noticias_faiss(pergunta_recuperacao: str) -> str:
+    """Recupera trechos do índice FAISS (semântica). Formule uma pergunta curta ou palavras-chave alinhadas com o que procura (ex.: «impacto taxas juros», «eleições autárquicas»)."""
+    q = (pergunta_recuperacao or "").strip()
+    if not q:
+        return "(pergunta vazia)"
+    vs = carregar_faiss()
+    docs = vs.similarity_search(q, k=8)
+    blocos: list[str] = []
+    for i, d in enumerate(docs, 1):
+        meta = d.metadata or {}
+        cab = f"--- Trecho {i} (consulta original da recolha: {meta.get('consulta', 'n/d')})\n"
+        blocos.append(cab + (d.page_content or "").strip())
+    texto = "\n\n".join(blocos)
+    return texto[:28000]
+
+
+_SYSTEM = """És um **analista editorial** que comenta **apenas** o que constar dos trechos devolvidos pela ferramenta `consultar_indice_noticias_faiss`.
+
+Antes de conclusões ou «leituras do dia», **invoca a ferramenta** com sub-perguntas diferentes se precisares de mais contexto (economia, política externa, sociedade, etc.).
+
+Regras:
+- Cita lacunas: o índice pode ser incompleto ou desactualizado em relação à hora actual.
+- Destaca **implicações** e **riscos** em linguagem clara (português europeu), sem sensacionalismo.
+- Se o utilizador pedir factos que não apareçam nos trechos, diz explicitamente que o índice não contém essa informação.
+- Opcionalmente termina com **3 perguntas de seguimento** úteis para aprofundar (ainda dentro do RAG)."""
+
+
+def criar_grafo_agente_analista() -> Any:
+    _garantir_chave_api()
+    llm = ChatGoogleGenerativeAI(model=_modelo(), temperature=0.35)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", _SYSTEM),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    return create_react_agent(
+        llm,
+        tools=[consultar_indice_noticias_faiss],
+        prompt=prompt,
+        checkpointer=MemorySaver(),
+    )
+
+
+def config_analista(thread_id: str = "ex22-analista-rag") -> dict:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def ultima_resposta_assistente(resultado: dict) -> str:
+    msgs = resultado.get("messages") or []
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage) and (m.content or "").strip():
+            c = m.content
+            return c if isinstance(c, str) else str(c)
+    return ""
