@@ -1,0 +1,698 @@
+# === models_clinicos.py ===
+"""Modelos Pydantic para avaliação de gravidade (dados fictícios / formação)."""
+
+from __future__ import annotations
+
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class NivelGravidade(str, Enum):
+    baixa = "baixa"
+    moderada = "moderada"
+    elevada = "elevada"
+    critica = "critica"
+
+
+class AvaliacaoGravidade(BaseModel):
+    """Saída estruturada do agente avaliador (LangGraph + Gemini)."""
+
+    paciente_id: int = Field(..., ge=1, le=9999)
+    nivel: NivelGravidade
+    score_0_100: int = Field(..., ge=0, le=100, description="Risco agregado 0=baixo, 100=máximo no cenário-demo.")
+    hipoteses_patologicas: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="Hipóteses a correlacionar com quadro clínico; não são diagnósticos.",
+    )
+    achados_laboratoriais_chave: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Bullets com valores ou padrões relevantes do laudo.",
+    )
+    riscos_imediatos: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="Riscos a vigilar (ex.: arritmogenicidade, disfunção renal aguda).",
+    )
+    perguntas_para_o_clinico: list[str] = Field(
+        default_factory=list,
+        max_length=6,
+        description="Perguntas de refinamento para o médico assistente.",
+    )
+    conduta_sugerida_formacao: str = Field(
+        ...,
+        max_length=2000,
+        description="Sugestões pedagógicas; não substituem protocolo institucional.",
+    )
+    disclaimer: str = Field(
+        default="Conteúdo gerado por IA sobre dados fictícios — não usar como parecer médico real.",
+        max_length=500,
+    )
+
+# === db_laudos.py ===
+"""Acesso PostgreSQL aos pacientes e laudos (demo)."""
+
+from __future__ import annotations
+
+import json
+import os
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+import psycopg2
+from psycopg2.extras import Json, RealDictCursor
+
+
+def _database_url() -> str:
+    u = (os.environ.get("DATABASE_URL") or "").strip()
+    if not u:
+        raise RuntimeError("Defina DATABASE_URL (ex.: postgresql://curso:curso@db:5432/laudos_clinicos).")
+    return u
+
+
+@contextmanager
+def cursor_dict() -> Iterator[Any]:
+    conn = psycopg2.connect(_database_url())
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def listar_pacientes_resumo() -> list[dict[str, Any]]:
+    with cursor_dict() as cur:
+        cur.execute(
+            """
+            SELECT p.id, p.nome_completo, p.idade, p.sexo,
+                   (SELECT COUNT(*) FROM exames_laboratoriais e WHERE e.paciente_id = p.id) AS n_exames,
+                   (SELECT nivel_gravidade FROM avaliacoes_engine a
+                    WHERE a.paciente_id = p.id ORDER BY a.criado_em DESC LIMIT 1) AS ultimo_nivel
+            FROM pacientes p
+            ORDER BY p.id
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def ficha_paciente(paciente_id: int) -> dict[str, Any] | None:
+    with cursor_dict() as cur:
+        cur.execute(
+            "SELECT * FROM pacientes WHERE id = %s",
+            (paciente_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def laudos_paciente_texto(paciente_id: int) -> str:
+    with cursor_dict() as cur:
+        cur.execute(
+            """
+            SELECT codigo, data_exame, painel, laudo_texto, valores_estruturados
+            FROM exames_laboratoriais
+            WHERE paciente_id = %s
+            ORDER BY data_exame, id
+            """,
+            (paciente_id,),
+        )
+        rows = cur.fetchall()
+    blocos: list[str] = []
+    for r in rows:
+        vs = r.get("valores_estruturados")
+        extra = ""
+        if vs is not None:
+            extra = "\nValores (JSON): " + json.dumps(vs, ensure_ascii=False)
+        blocos.append(
+            f"--- {r['codigo']} | {r['data_exame']} | {r.get('painel') or '—'}\n{r['laudo_texto']}{extra}"
+        )
+    return "\n\n".join(blocos) if blocos else "(sem exames)"
+
+
+def ultima_avaliacao_dict(paciente_id: int) -> dict[str, Any] | None:
+    with cursor_dict() as cur:
+        cur.execute(
+            """
+            SELECT id, nivel_gravidade, score, payload_json, criado_em
+            FROM avaliacoes_engine
+            WHERE paciente_id = %s
+            ORDER BY criado_em DESC
+            LIMIT 1
+            """,
+            (paciente_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        if isinstance(d.get("criado_em"), object) and hasattr(d["criado_em"], "isoformat"):
+            d["criado_em"] = d["criado_em"].isoformat()
+        return d
+
+
+def inserir_avaliacao(paciente_id: int, nivel: str, score: int, payload: dict[str, Any]) -> None:
+    with cursor_dict() as cur:
+        cur.execute(
+            """
+            INSERT INTO avaliacoes_engine (paciente_id, nivel_gravidade, score, payload_json)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (paciente_id, nivel, score, Json(payload)),
+        )
+
+# === chroma_ingest.py ===
+"""Indexação Chroma: laudos (Postgres) + textos pedagógicos fictícios."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+import db_laudos
+
+COLLECTION = "laudos_clinicos_demo"
+
+
+def _persist_dir() -> str:
+    return (os.environ.get("CHROMA_PERSIST_DIR") or str(Path(__file__).resolve().parent / "chroma_data")).strip()
+
+
+def _embeddings() -> GoogleGenerativeAIEmbeddings:
+    modelo = (
+        os.environ.get("GEMINI_EMBEDDING_MODEL")
+        or os.environ.get("GEMINI_EMBEDDING_MODEL_004")
+        or "gemini-embedding-001"
+    ).strip()
+    if modelo.startswith("models/"):
+        modelo = modelo.removeprefix("models/")
+    legacy = {"text-embedding-004", "embedding-001"}
+    if modelo in legacy:
+        modelo = "gemini-embedding-001"
+    return GoogleGenerativeAIEmbeddings(model=modelo)
+
+
+def _documentos_pedagogicos() -> list[Document]:
+    textos = [
+        (
+            "troponina",
+            "Elevação de troponina de alta sensibilidade com curva dinâmica sugere lesão miocárdica; "
+            "correlacionar com sintomas, ECG e factores de risco cardiovascular. Em formação, simular discussão "
+            "de regra-in / regra-out de SCA.",
+        ),
+        (
+            "hipercalemia",
+            "Hipercalemia moderada a grave pode associar-se a alterações de condução e risco arritmico. "
+            "Rever medicamentos (IECA, ARA, diuréticos poupadores de potássio), função renal e acidose.",
+        ),
+        (
+            "drc_anemia",
+            "Anemia em doente com DRC pode ser multifactorial (deficiência de ferro, eritropoietina, "
+            "toxicidade medicamentosa). Integrar com ferro serico, ferritina e hemograma previo.",
+        ),
+        (
+            "leucocitose",
+            "Leucocitose com desvio esquerdo pode indicar infecção bacteriana, mas também stress, "
+            "corticoterapia ou leucemias. Contexto clínico e imagiologia orientam a urgência.",
+        ),
+        (
+            "tireoide",
+            "TSH suprimido com T4 livre elevado sugere hipertireoidismo; TSH suprimido com T4 normal pode "
+            "ser subclínico — decisão terapêutica depende de sintomas, idade e comorbilidades.",
+        ),
+    ]
+    return [
+        Document(page_content=t, metadata={"fonte": "protocolo_pedagogico", "tema": tag})
+        for tag, t in textos
+    ]
+
+
+def garantir_indice_chroma(*, reconstruir: bool = False) -> Chroma:
+    """Carrega ou cria a coleção Chroma com laudos + protocolos demo."""
+    persist = _persist_dir()
+    Path(persist).mkdir(parents=True, exist_ok=True)
+    emb = _embeddings()
+
+    if not reconstruir:
+        try:
+            vs = Chroma(
+                collection_name=COLLECTION,
+                embedding_function=emb,
+                persist_directory=persist,
+            )
+            if vs._collection.count() > 0:
+                return vs
+        except Exception:
+            pass
+
+    import chromadb
+
+    client = chromadb.PersistentClient(path=persist)
+    try:
+        client.delete_collection(COLLECTION)
+    except Exception:
+        pass
+
+    docs: list[Document] = []
+    docs.extend(_documentos_pedagogicos())
+    for p in db_laudos.listar_pacientes_resumo():
+        pid = int(p["id"])
+        corpo = db_laudos.laudos_paciente_texto(pid)
+        if corpo and corpo != "(sem exames)":
+            docs.append(
+                Document(
+                    page_content=f"Paciente ID {pid} — {p['nome_completo']}, {p['idade']} anos.\n\n{corpo}",
+                    metadata={"paciente_id": str(pid), "fonte": "laudo_postgres"},
+                )
+            )
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=120)
+    chunks = splitter.split_documents(docs)
+    if not chunks:
+        raise RuntimeError("Sem documentos para indexar.")
+    return Chroma.from_documents(
+        documents=chunks,
+        embedding=emb,
+        collection_name=COLLECTION,
+        persist_directory=persist,
+    )
+
+
+def as_retriever(k: int = 6):
+    vs = garantir_indice_chroma(reconstruir=False)
+    return vs.as_retriever(search_kwargs={"k": k})
+
+# === graph_avaliacao.py ===
+"""LangGraph: pipeline Carregar laudos → Avaliar (Pydantic) → Gravar no Postgres."""
+
+from __future__ import annotations
+
+import os
+from typing import Any, TypedDict
+
+from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import END, START, StateGraph
+
+import db_laudos
+from models_clinicos import AvaliacaoGravidade
+
+
+class EstadoAvaliacao(TypedDict, total=False):
+    paciente_id: int
+    texto_laudos: str
+    ficha_txt: str
+    avaliacao_dict: dict[str, Any] | None
+    erro: str | None
+
+
+def _modelo() -> str:
+    return (os.environ.get("GEMINI_MODEL_EX23") or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+
+
+def _garantir_chave() -> None:
+    k = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not k:
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY.")
+    os.environ.setdefault("GOOGLE_API_KEY", k)
+
+
+def no_carregar(estado: EstadoAvaliacao) -> dict[str, Any]:
+    pid = int(estado["paciente_id"])
+    f = db_laudos.ficha_paciente(pid)
+    if not f:
+        return {"erro": f"Paciente {pid} inexistente.", "texto_laudos": "", "ficha_txt": ""}
+    ficha = (
+        f"Nome: {f['nome_completo']}\nIdade: {f['idade']}\nSexo: {f.get('sexo')}\n"
+        f"Alergias: {f.get('alergias')}\nNotas: {f.get('observacoes_clinicas')}"
+    )
+    txt = db_laudos.laudos_paciente_texto(pid)
+    return {"texto_laudos": txt, "ficha_txt": ficha, "erro": None}
+
+
+def no_avaliar(estado: EstadoAvaliacao) -> dict[str, Any]:
+    if estado.get("erro"):
+        return {}
+    _garantir_chave()
+    llm = ChatGoogleGenerativeAI(model=_modelo(), temperature=0.15)
+    structured = llm.with_structured_output(AvaliacaoGravidade)
+    prompt = f"""És um **médico formador** (cenário simulado). Com base **apenas** na ficha e nos laudos abaixo,
+produz uma avaliação estruturada de **gravidade potencial** do conjunto laboratorial (não é diagnóstico definitivo).
+
+FICHA:
+{estado.get("ficha_txt", "")}
+
+LAUDOS:
+{estado.get("texto_laudos", "")}
+
+Regras:
+- Preenche `paciente_id` exactamente com {estado["paciente_id"]}.
+- Séveridade coerente com achados (ex.: troponina em curva ascendente → pelo menos `elevada` ou `critica`).
+- `hipoteses_patologicas` como hipóteses a discutir, não como conclusões fechadas.
+- Português europeu, tom clínico conciso.
+"""
+    try:
+        out = structured.invoke([HumanMessage(content=prompt)])
+        if not isinstance(out, AvaliacaoGravidade):
+            return {"erro": "Resposta estruturada inválida.", "avaliacao_dict": None}
+        return {"avaliacao_dict": out.model_dump(mode="json"), "erro": None}
+    except Exception as e:
+        return {"erro": str(e), "avaliacao": None}
+
+
+def no_gravar(estado: EstadoAvaliacao) -> dict[str, Any]:
+    d = estado.get("avaliacao_dict")
+    if estado.get("erro") or not isinstance(d, dict):
+        return {}
+    try:
+        av = AvaliacaoGravidade.model_validate(d)
+    except Exception:
+        return {}
+    payload = av.model_dump(mode="json")
+    db_laudos.inserir_avaliacao(
+        av.paciente_id,
+        av.nivel.value,
+        av.score_0_100,
+        payload,
+    )
+    return {}
+
+
+def construir_grafo_avaliacao():
+    g = StateGraph(EstadoAvaliacao)
+    g.add_node("carregar", no_carregar)
+    g.add_node("avaliar", no_avaliar)
+    g.add_node("gravar", no_gravar)
+    g.add_edge(START, "carregar")
+    g.add_edge("carregar", "avaliar")
+    g.add_edge("avaliar", "gravar")
+    g.add_edge("gravar", END)
+    return g.compile()
+
+
+def executar_avaliacao(paciente_id: int) -> EstadoAvaliacao:
+    app = construir_grafo_avaliacao()
+    return app.invoke({"paciente_id": int(paciente_id)})
+
+# === agente_chat.py ===
+"""Agente ReAct (LangGraph) para médicos: SQL (Postgres) + RAG (Chroma)."""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+import db_laudos
+
+_retriever: Any | None = None
+
+
+def configurar_rag(retriever: Any | None) -> None:
+    global _retriever
+    _retriever = retriever
+
+
+def _modelo() -> str:
+    return (os.environ.get("GEMINI_MODEL_EX23") or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+
+
+def _garantir_chave() -> None:
+    k = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not k:
+        raise RuntimeError("Defina GOOGLE_API_KEY ou GEMINI_API_KEY.")
+    os.environ.setdefault("GOOGLE_API_KEY", k)
+
+
+@tool
+def listar_pacientes_demo() -> str:
+    """Lista os 10 pacientes fictícios com id, nome, idade e último nível de gravidade avaliado (se existir)."""
+    rows = db_laudos.listar_pacientes_resumo()
+    return json.dumps(rows, ensure_ascii=False, indent=2, default=str)
+
+
+@tool
+def obter_ficha_clinica_resumo(paciente_id: int) -> str:
+    """Devolve ficha demográfica e notas clínicas do paciente (Postgres)."""
+    f = db_laudos.ficha_paciente(int(paciente_id))
+    if not f:
+        return f"(paciente_id={paciente_id} não encontrado)"
+    return json.dumps(dict(f), ensure_ascii=False, indent=2, default=str)
+
+
+@tool
+def obter_texto_laudos_laboratoriais(paciente_id: int) -> str:
+    """Concatena todos os laudos laboratoriais do paciente tal como estão na base (texto bruto)."""
+    return db_laudos.laudos_paciente_texto(int(paciente_id))
+
+
+@tool
+def obter_ultima_avaliacao_gravidade_json(paciente_id: int) -> str:
+    """Última linha da tabela `avaliacoes_engine` para o paciente (JSON), incluindo payload Pydantic serializado."""
+    row = db_laudos.ultima_avaliacao_dict(int(paciente_id))
+    if not row:
+        return "(sem avaliação gravada — pode sugerir correr o motor LangGraph na interface.)"
+    return json.dumps(row, ensure_ascii=False, indent=2, default=str)
+
+
+@tool
+def consultar_base_pedagogica_rag(pergunta: str) -> str:
+    """Recupera trechos da base Chroma (protocolos fictícios + laudos indexados). Use perguntas curtas e específicas."""
+    q = (pergunta or "").strip()
+    if not q:
+        return "(pergunta vazia)"
+    if _retriever is None:
+        return "(RAG indisponível: índice Chroma não configurado.)"
+    docs = _retriever.invoke(q)
+    partes: list[str] = []
+    for i, d in enumerate(docs, 1):
+        meta = d.metadata or {}
+        partes.append(f"--- Trecho {i} [meta: {meta}]\n{d.page_content}")
+    return "\n\n".join(partes)[:24000]
+
+
+_SYSTEM = """És um **assistente clínico de formação** para médicos, sobre **dados 100% fictícios** desta demo.
+
+Capacidades (ferramentas):
+- Listar pacientes e ler fichas/laudos na **PostgreSQL**.
+- Ler a **última avaliação de gravidade** já calculada pelo motor LangGraph (Pydantic).
+- Consultar a **ChromaDB** com textos pedagógicos e laudos indexados (RAG).
+
+Regras:
+- Não inventes resultados laboratoriais: se precisares, chama `obter_texto_laudos_laboratoriais`.
+- Deixa explícito quando estás a inferir vs. a citar a base.
+- Quando discutires patologias possíveis, usa linguagem de **hipótese diagnóstica** e cita riscos de subdiagnóstico/sobrediagnóstico.
+- Português europeu. Lembra o utilizador de que isto **não** substitui parecer médico nem prática real."""
+
+
+def criar_agente_chat_medico() -> Any:
+    _garantir_chave()
+    llm = ChatGoogleGenerativeAI(model=_modelo(), temperature=0.2)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", _SYSTEM),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    tools = [
+        listar_pacientes_demo,
+        obter_ficha_clinica_resumo,
+        obter_texto_laudos_laboratoriais,
+        obter_ultima_avaliacao_gravidade_json,
+        consultar_base_pedagogica_rag,
+    ]
+    return create_react_agent(llm, tools=tools, prompt=prompt, checkpointer=MemorySaver())
+
+
+def config_chat(paciente_id: int, *, thread_suffix: int = 0) -> dict:
+    return {"configurable": {"thread_id": f"ex23-paciente-{int(paciente_id)}-{int(thread_suffix)}"}}
+
+
+def ultima_resposta_assistente(resultado: dict) -> str:
+    msgs = resultado.get("messages") or []
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage) and (m.content or "").strip():
+            c = m.content
+            return c if isinstance(c, str) else str(c)
+    return ""
+
+
+def invocar_mensagem(graph: Any, paciente_id: int, mensagem: str, *, thread_suffix: int = 0) -> str:
+    cfg = config_chat(paciente_id, thread_suffix=thread_suffix)
+    out = graph.invoke({"messages": [HumanMessage(content=mensagem)]}, cfg)
+    return ultima_resposta_assistente(out)
+
+# === streamlit_app.py ===
+"""Interface Streamlit — laudos fictícios, Postgres, Chroma, LangGraph + agente chat."""
+
+from __future__ import annotations
+
+import json
+
+import streamlit as st
+from langchain_core.messages import HumanMessage
+
+import agente_chat
+import chroma_ingest
+import db_laudos
+import graph_avaliacao
+
+st.set_page_config(page_title="Laudos clínicos (demo)", layout="wide", initial_sidebar_state="expanded")
+
+st.title("Laudos laboratoriais — demo multi-agente")
+st.caption(
+    "Dados **fictícios**. PostgreSQL + ChromaDB + LangGraph (avaliação Pydantic) + agente ReAct para discussão clínica. "
+    "Requer `GOOGLE_API_KEY` no `.env`."
+)
+
+
+def _suffix() -> int:
+    return int(st.session_state.get("thread_suffix", 0))
+
+
+def _hist_key(pid: int) -> str:
+    return f"msgs_{pid}_{_suffix()}"
+
+
+def _ensure_graph() -> None:
+    if "react_graph" not in st.session_state:
+        st.session_state.react_graph = agente_chat.criar_agente_chat_medico()
+
+
+def _ensure_chroma(rebuild: bool) -> None:
+    with st.spinner("A indexar / carregar Chroma (pode demorar na primeira vez)…"):
+        vs = chroma_ingest.garantir_indice_chroma(reconstruir=rebuild)
+        agente_chat.configurar_rag(vs.as_retriever(search_kwargs={"k": 6}))
+
+
+_ensure_graph()
+
+with st.sidebar:
+    st.subheader("Índice semântico")
+    if st.button("Reindexar Chroma (apagar coleção demo)"):
+        _ensure_chroma(rebuild=True)
+        st.success("Chroma reindexado.")
+        st.rerun()
+    if st.button("Garantir Chroma (sem apagar)"):
+        _ensure_chroma(rebuild=False)
+        st.success("Chroma pronto.")
+        st.rerun()
+
+    st.divider()
+    st.subheader("Motor LangGraph")
+    st.caption("Pipeline: carregar laudos → Gemini + Pydantic → gravar em `avaliacoes_engine`.")
+
+try:
+    pacientes = db_laudos.listar_pacientes_resumo()
+except Exception as e:
+    st.error(f"Erro ao ligar ao PostgreSQL: {e}")
+    st.stop()
+
+if not pacientes:
+    st.warning("Sem pacientes na base — verifique o `init_db`.")
+    st.stop()
+
+if "chroma_inicializado" not in st.session_state:
+    try:
+        _ensure_chroma(rebuild=False)
+        st.session_state.chroma_inicializado = True
+    except Exception as e:
+        st.error(f"Chroma / embeddings: {e}")
+        st.info("Confirme `GOOGLE_API_KEY` e volte a tentar, ou use «Reindexar Chroma» na barra lateral.")
+        st.stop()
+
+opts = {f"{p['id']} — {p['nome_completo']} ({p['idade']}a)": int(p["id"]) for p in pacientes}
+label = st.selectbox("Paciente activo", list(opts.keys()))
+pid = opts[label]
+
+col_a, col_b = st.columns([1, 2])
+
+with col_a:
+    st.subheader("Ficha")
+    f = db_laudos.ficha_paciente(pid)
+    if f:
+        st.markdown(
+            f"**{f['nome_completo']}**\n\n"
+            f"- Idade: {f['idade']}\n"
+            f"- Sexo: {f.get('sexo')}\n"
+            f"- Alergias: {f.get('alergias')}\n"
+            f"- Notas: {f.get('observacoes_clinicas')}"
+        )
+    st.subheader("Última gravidade (Postgres)")
+    av = db_laudos.ultima_avaliacao_dict(pid)
+    if av:
+        st.metric("Score", int(av.get("score") or 0), help="0–100 no cenário-demo")
+        st.write("**Nível:**", av.get("nivel_gravidade"))
+        payload = av.get("payload_json")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                pass
+        if isinstance(payload, dict):
+            st.markdown("**Riscos**")
+            for r in payload.get("riscos_imediatos") or []:
+                st.markdown(f"- {r}")
+            st.markdown("**Hipóteses**")
+            for h in payload.get("hipoteses_patologicas") or []:
+                st.markdown(f"- {h}")
+    else:
+        st.info("Ainda sem avaliação — use o botão abaixo.")
+
+    if st.button("Correr pipeline de avaliação (LangGraph)", type="primary"):
+        with st.spinner("A avaliar…"):
+            try:
+                out = graph_avaliacao.executar_avaliacao(pid)
+                if out.get("erro"):
+                    st.error(out["erro"])
+                else:
+                    st.success("Avaliação gravada.")
+            except Exception as e:
+                st.exception(e)
+        st.rerun()
+
+    if st.button("Limpar conversa deste paciente (nova thread)"):
+        st.session_state.thread_suffix = _suffix() + 1
+        k = _hist_key(pid)
+        if k in st.session_state:
+            del st.session_state[k]
+        st.rerun()
+
+with col_b:
+    st.subheader("Chat médico (ReAct + Postgres + RAG)")
+    hk = _hist_key(pid)
+    if hk not in st.session_state:
+        st.session_state[hk] = []
+
+    for role, text in st.session_state[hk]:
+        with st.chat_message(role):
+            st.markdown(text)
+
+    if prompt := st.chat_input("Pergunte sobre hipóteses, riscos ou dados laboratoriais…"):
+        st.session_state[hk].append(("user", prompt))
+        cfg = agente_chat.config_chat(pid, thread_suffix=_suffix())
+        try:
+            out = st.session_state.react_graph.invoke({"messages": [HumanMessage(content=prompt)]}, cfg)
+            resp = agente_chat.ultima_resposta_assistente(out)
+        except Exception as e:
+            resp = f"**Erro:** `{e}`"
+        st.session_state[hk].append(("assistant", resp))
+        st.rerun()
+

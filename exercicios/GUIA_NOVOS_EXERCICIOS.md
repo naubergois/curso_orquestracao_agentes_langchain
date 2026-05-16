@@ -38,6 +38,7 @@ Copiar uma pasta existente **análoga** (ex.: `03_calculadora` para novo Streaml
 - **`GEMINI_MODEL_EX09`** — opcional no exercício 09 (RAG jurídico / Chroma); se vazio, usa-se `GEMINI_MODEL`.
 - **`GEMINI_MODEL_EX10`** — opcional no exercício 10 (triagem de imagens + MongoDB); se vazio, usa-se `GEMINI_MODEL`.
 - **`GEMINI_MODEL_EX13`** — opcional no exercício 13 (agente sobre PDFs chunkados); se vazio, usa-se `GEMINI_MODEL`.
+- **`GEMINI_MODEL_EX23`** — opcional no exercício 23 (laudos + Chroma + Streamlit); se vazio, usa-se `GEMINI_MODEL`.
 - Novo exercício com modelo **dedicado**: definir nome claro (`GEMINI_MODEL_EXNN` ou prefixo do tema) e **documentar em `.env.example`** com comentário e caminho da pasta.
 - Opcionais partilhados: `GEMINI_RETRY_ATTEMPTS`, `GEMINI_RETRY_DELAY_SEC`.
 

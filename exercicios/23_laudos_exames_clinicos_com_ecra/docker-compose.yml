@@ -1,0 +1,50 @@
+# Streamlit + PostgreSQL + Chroma — ex. 23 (laudos fictícios + agentes). Build: contexto `exercicios/`.
+name: curso-ex23-laudos-clinicos
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curso
+      POSTGRES_PASSWORD: curso
+      POSTGRES_DB: laudos_clinicos
+    volumes:
+      - ./init_db:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT_EX23:-5441}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curso -d laudos_clinicos"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  streamlit:
+    build:
+      context: ..
+      dockerfile: 23_laudos_exames_clinicos_com_ecra/Dockerfile
+    ports:
+      - "${STREAMLIT_PORT:-8511}:8501"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../.env:/app/.env:ro
+      - ex23_chroma:/app/chroma_data
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL_EX23: ${GEMINI_MODEL_EX23:-}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-}
+      GEMINI_MODEL_FALLBACKS: ${GEMINI_MODEL_FALLBACKS:-}
+      DATABASE_URL: postgresql://curso:curso@db:5432/laudos_clinicos
+      CHROMA_PERSIST_DIR: /app/chroma_data
+      ANONYMIZED_TELEMETRY: "false"
+      CHROMADB_ANONYMIZED_TELEMETRY: "false"
+      PYTHONUNBUFFERED: "1"
+
+volumes:
+  ex23_chroma: {}
